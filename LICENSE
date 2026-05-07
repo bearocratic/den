@@ -1,0 +1,26 @@
+Den License
+
+Copyright (c) 2026 Bearocratic
+
+This license covers Den — the binary you install from Homebrew or download
+from a release — together with anything bundled inside it (icons,
+documentation).
+
+Den is yours to use. Install it on the devices you own or control. Use it
+to keep an eye on the repos you work in — for as long as you want. No fees,
+no accounts, no telemetry.
+
+A few things we ask in return:
+
+  Please don't redistribute the Den binary as your own, repackage it for
+  resale, or take it apart to build something that competes with it. The
+  name "Den" and the Bearocratic logo are ours — please don't use them
+  for your own projects without asking. If you'd like to ship Den inside
+  something you're building, write to us at hello@bearocratic.io — we'll
+  find a way.
+
+Den is provided as it is. It will sometimes have bugs, and software is
+fragile in ways nobody fully predicts. We can't promise it will never
+crash, and we can't be held responsible if it does.
+
+Use it kindly. Make something good with it.
