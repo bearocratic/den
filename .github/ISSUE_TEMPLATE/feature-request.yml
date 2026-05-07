@@ -1,7 +1,7 @@
 name: Feature request
 description: Suggest something Den should do, or do differently.
 title: "[feature] "
-labels: ["feature"]
+labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
