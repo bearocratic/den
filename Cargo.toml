@@ -8,11 +8,11 @@ description = "TUI watcher for git repos in a base folder — shows dirty state 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
-git2 = { version = "0.19", default-features = false }
+git2 = { version = "0.20", default-features = false }
 notify = "6"
 notify-debouncer-mini = "0.4"
 pulldown-cmark = { version = "0.12", default-features = false }
-ratatui = "0.28"
+ratatui = "0.30"
 walkdir = "2"
 
 [profile.release]

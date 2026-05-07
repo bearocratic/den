@@ -384,7 +384,10 @@ fn run<B: ratatui::backend::Backend + std::io::Write>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     rx: &mpsc::Receiver<DebounceEventResult>,
-) -> Result<()> {
+) -> Result<()>
+where
+    <B as ratatui::backend::Backend>::Error: Send + Sync + 'static,
+{
     loop {
         ensure_detail(app);
         terminal.draw(|f| ui::render(f, app))?;
