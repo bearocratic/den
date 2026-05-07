@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest something Den should do, or do differently.
+title: "[feature] "
+labels: ["feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Den's surface stays small on purpose. Suggestions are welcome — we
+        won't take all of them, but every well-described request helps shape
+        the tool.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation in your own workflow first — not the proposed feature.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Den to do?
+      description: A sketch of the behaviour, command, or shortcut.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: Other tools or workarounds that almost solve it, and why they fall short.
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Mockups, links, related issues.
+    validations:
+      required: false

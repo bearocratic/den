@@ -1,0 +1,73 @@
+name: Bug report
+description: Something in Den is broken or behaving unexpectedly.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. The more concrete the
+        details, the faster we can land a fix.
+
+  - type: input
+    id: version
+    attributes:
+      label: Den version
+      description: Output of `den --version`.
+      placeholder: "den 0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (amd64)
+        - Linux (arm64)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal
+      description: Terminal emulator and (if relevant) shell.
+      placeholder: "Ghostty 1.x, zsh"
+    validations:
+      required: false
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you saw vs. what you expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: |
+        Steps to reproduce, ideally on a small / clean folder. Include flags
+        passed to `den`, what state the repos were in, and which keys you
+        pressed.
+      placeholder: |
+        1. cd ~/Projects
+        2. den
+        3. press `i` on the cabinet tile
+        4. observe …
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Logs, screenshots, or context that might help.
+    validations:
+      required: false
