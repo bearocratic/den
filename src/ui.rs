@@ -243,17 +243,17 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(
             "den",
             Style::default()
-                .fg(IVORY)
+                .fg(AMBER_STRONG)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled(app.base.display().to_string(), Style::default().fg(STONE)),
+        Span::styled(app.base.display().to_string(), Style::default().fg(AMBER)),
         Span::raw("  "),
-        Span::styled(format!("{n} repos"), Style::default().fg(STONE_STRONG)),
+        Span::styled(format!("{n} repos"), Style::default().fg(AMBER_STRONG)),
         Span::raw("  "),
         Span::styled(
             format!("{dirty} dirty"),
-            Style::default().fg(if dirty > 0 { AMBER } else { STONE_STRONG }),
+            Style::default().fg(if dirty > 0 { AMBER_STRONG } else { STONE_STRONG }),
         ),
         Span::raw("  "),
         Span::styled(
@@ -271,10 +271,36 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
                 "{hidden} hidden{}",
                 if app.show_hidden { " (shown)" } else { "" }
             ),
-            Style::default().fg(if hidden > 0 { STONE } else { STONE_STRONG }),
+            Style::default().fg(if hidden > 0 { AMBER } else { STONE_STRONG }),
         ),
     ]);
-    f.render_widget(Paragraph::new(line), area);
+    let sync_line = Line::from(vec![sync_span(app)]);
+    f.render_widget(Paragraph::new(vec![line, sync_line]), area);
+}
+
+fn sync_span(app: &App) -> Span<'static> {
+    if app.is_fetching {
+        return Span::styled(
+            "↻ syncing…".to_string(),
+            Style::default().fg(AMBER_STRONG).add_modifier(Modifier::BOLD),
+        );
+    }
+    let label = match app.last_auto_fetch {
+        None => "last sync: —".to_string(),
+        Some(t) => format!("last sync: {} ago", relative_short(t.elapsed())),
+    };
+    Span::styled(label, Style::default().fg(STONE_STRONG))
+}
+
+fn relative_short(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{} min", secs / 60)
+    } else {
+        format!("{}h", secs / 3600)
+    }
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
@@ -311,7 +337,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
                 "rendered"
             }));
         } else {
-            spans.push(key("1/2/3/4"));
+            spans.push(key("1/2"));
             spans.push(label("focus"));
             spans.push(key("i"));
             spans.push(label("readme"));
@@ -584,7 +610,7 @@ fn render_detail(f: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(STONE))
-        .title(detail_title(repo, pinned));
+        .title(detail_title(repo, pinned, app));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -593,14 +619,12 @@ fn render_detail(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
+    let status_lines = parse_status(&app.status_content);
+    let status_h = (status_lines.len() as u16 + 2).clamp(3, 10);
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(8),
-            Constraint::Min(4),
-            Constraint::Length(8),
-            Constraint::Length(10),
-        ])
+        .constraints([Constraint::Length(status_h), Constraint::Min(4)])
         .split(inner);
 
     render_section(
@@ -608,7 +632,7 @@ fn render_detail(f: &mut Frame, area: Rect, app: &App) {
         chunks[0],
         app,
         DetailSection::Status,
-        parse_status(&app.status_content),
+        status_lines,
         app.status_scroll,
     );
     render_section(
@@ -619,90 +643,6 @@ fn render_detail(f: &mut Frame, area: Rect, app: &App) {
         parse_diff(&app.diff_content),
         app.diff_scroll,
     );
-    render_section(
-        f,
-        chunks[2],
-        app,
-        DetailSection::History,
-        parse_history(&app.history_content),
-        app.history_scroll,
-    );
-    render_section(
-        f,
-        chunks[3],
-        app,
-        DetailSection::Releases,
-        render_release_section(app),
-        app.releases_scroll,
-    );
-}
-
-fn render_release_section(app: &App) -> Vec<Line<'static>> {
-    if app.release_tag.is_empty() {
-        return vec![Line::from(Span::styled(
-            "no tags",
-            Style::default().fg(STONE),
-        ))];
-    }
-    let mut out: Vec<Line> = Vec::new();
-    let time = SystemTime::UNIX_EPOCH + Duration::from_secs(app.release_time_unix);
-    let rel = relative_time(time);
-    let mode_label = if app.releases_rendered { "rendered" } else { "raw" };
-    let mut header_spans: Vec<Span> = vec![
-        Span::styled("◇ ", Style::default().fg(STONE)),
-        Span::styled(
-            app.release_tag.clone(),
-            Style::default()
-                .fg(AMBER_STRONG)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled(rel, Style::default().fg(STONE)),
-    ];
-    if !app.release_notes_content.is_empty() || !app.release_notes_path.is_empty() {
-        header_spans.push(Span::raw("  ·  "));
-        header_spans.push(Span::styled(
-            format!("m {}", mode_label),
-            Style::default().fg(STONE_STRONG),
-        ));
-    }
-    out.push(Line::from(header_spans));
-    if !app.release_subject.is_empty() {
-        out.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                app.release_subject.clone(),
-                Style::default().fg(IVORY).add_modifier(Modifier::BOLD),
-            ),
-        ]));
-    }
-    if !app.release_body.is_empty() {
-        for bl in app.release_body.lines() {
-            if bl.trim().is_empty() {
-                out.push(Line::raw(""));
-                continue;
-            }
-            out.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(bl.to_string(), Style::default().fg(STONE_STRONG)),
-            ]));
-        }
-    }
-    if !app.release_notes_path.is_empty() {
-        out.push(Line::raw(""));
-        out.push(Line::from(vec![Span::styled(
-            app.release_notes_path.clone(),
-            Style::default().fg(STONE),
-        )]));
-        out.push(Line::raw(""));
-        let body_lines = if app.releases_rendered {
-            crate::markdown::render(&app.release_notes_content)
-        } else {
-            parse_markdown_raw(&app.release_notes_content)
-        };
-        out.extend(body_lines);
-    }
-    out
 }
 
 fn render_readme(f: &mut Frame, area: Rect, app: &App) {
@@ -749,8 +689,8 @@ fn parse_markdown_raw(s: &str) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn detail_title(repo: &RepoStatus, pinned: bool) -> Line<'_> {
-    let mut spans = Vec::new();
+fn detail_title(repo: &RepoStatus, pinned: bool, app: &App) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
     spans.push(Span::raw(" "));
     if pinned {
         spans.push(Span::styled("★ ", Style::default().fg(AMBER_STRONG)));
@@ -765,6 +705,32 @@ fn detail_title(repo: &RepoStatus, pinned: bool) -> Line<'_> {
             Style::default()
                 .fg(AMBER_STRONG)
                 .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if repo.ahead > 0 {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            format!("↑{}", repo.ahead),
+            Style::default().fg(FOREST).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if repo.behind > 0 {
+        spans.push(Span::raw(if repo.ahead > 0 { " " } else { "  " }));
+        spans.push(Span::styled(
+            format!("↓{}", repo.behind),
+            Style::default().fg(AMBER),
+        ));
+    }
+    if !app.release_tag.is_empty() {
+        let time = SystemTime::UNIX_EPOCH + Duration::from_secs(app.release_time_unix);
+        spans.push(Span::raw("  ·  "));
+        spans.push(Span::styled(
+            format!("{} ", app.release_tag.clone()),
+            Style::default().fg(STONE),
+        ));
+        spans.push(Span::styled(
+            format!("{} ago", relative_time(time)),
+            Style::default().fg(STONE_STRONG),
         ));
     }
     Line::from(spans)
@@ -791,8 +757,6 @@ fn render_section(
     let num = match section {
         DetailSection::Status => "1",
         DetailSection::Diff => "2",
-        DetailSection::History => "3",
-        DetailSection::Releases => "4",
     };
     let title = Line::from(vec![Span::styled(
         format!(" {} {} ", num, section.label()),
@@ -820,17 +784,7 @@ fn parse_status(s: &str) -> Vec<Line<'_>> {
         return out;
     }
     for l in s.lines() {
-        if let Some(rest) = l.strip_prefix("## ") {
-            out.push(Line::from(vec![
-                Span::styled("on ", Style::default().fg(STONE)),
-                Span::styled(
-                    rest.to_string(),
-                    Style::default()
-                        .fg(AMBER_STRONG)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]));
-            out.push(Line::raw(""));
+        if l.starts_with("## ") {
             continue;
         }
         let prefix: String = l.chars().take(2).collect();
@@ -874,51 +828,9 @@ fn parse_diff(s: &str) -> Vec<Line<'_>> {
         } else if l.starts_with('-') {
             Style::default().fg(CONFLICT)
         } else {
-            Style::default().fg(STONE_STRONG)
+            Style::default().fg(STONE)
         };
         out.push(Line::from(Span::styled(l.to_string(), style)));
-    }
-    out
-}
-
-fn parse_history(s: &str) -> Vec<Line<'_>> {
-    if s.trim().is_empty() {
-        return vec![Line::from(Span::styled(
-            "no commits",
-            Style::default().fg(STONE),
-        ))];
-    }
-    let mut out: Vec<Line> = Vec::new();
-    for l in s.lines() {
-        let parts: Vec<&str> = l.splitn(4, '\x1f').collect();
-        if parts.len() == 4 {
-            out.push(Line::from(vec![
-                Span::styled(
-                    parts[0].to_string(),
-                    Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("  "),
-                Span::styled(format!("{:<10}", parts[1]), Style::default().fg(STONE)),
-                Span::raw(" "),
-                Span::styled(
-                    format!("{:<14}", truncate(parts[2], 14)),
-                    Style::default().fg(STONE_STRONG),
-                ),
-                Span::raw(" "),
-                Span::styled(parts[3].to_string(), Style::default().fg(IVORY)),
-            ]));
-        } else {
-            out.push(Line::raw(l.to_string()));
-        }
-    }
-    out
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    let mut out: String = s.chars().take(n).collect();
-    if s.chars().count() > n {
-        out.pop();
-        out.push('…');
     }
     out
 }

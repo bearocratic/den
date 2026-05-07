@@ -32,31 +32,36 @@ struct Args {
     /// Maximum recursion depth when scanning for repos.
     #[arg(long, default_value_t = 4)]
     depth: usize,
+
+    /// Seconds between background `git fetch` cycles. Set to 0 to disable.
+    #[arg(long, default_value_t = 300)]
+    fetch_interval: u64,
+}
+
+#[derive(Debug, Clone)]
+pub enum FetchMsg {
+    CycleStarted,
+    Done(PathBuf),
+    CycleFinished,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailSection {
     Status,
     Diff,
-    History,
-    Releases,
 }
 
 impl DetailSection {
     pub fn next(self) -> Self {
         match self {
             DetailSection::Status => DetailSection::Diff,
-            DetailSection::Diff => DetailSection::History,
-            DetailSection::History => DetailSection::Releases,
-            DetailSection::Releases => DetailSection::Status,
+            DetailSection::Diff => DetailSection::Status,
         }
     }
     pub fn label(self) -> &'static str {
         match self {
             DetailSection::Status => "status",
             DetailSection::Diff => "diff",
-            DetailSection::History => "history",
-            DetailSection::Releases => "releases",
         }
     }
 }
@@ -72,20 +77,12 @@ pub struct App {
     pub detail_cache_key: Option<PathBuf>,
     pub status_content: String,
     pub diff_content: String,
-    pub history_content: String,
     pub release_tag: String,
     pub release_time_unix: u64,
-    pub release_subject: String,
-    pub release_body: String,
-    pub release_notes_path: String,
-    pub release_notes_content: String,
-    pub releases_rendered: bool,
     pub readme_content: String,
     pub readme_path: String,
     pub status_scroll: u16,
     pub diff_scroll: u16,
-    pub history_scroll: u16,
-    pub releases_scroll: u16,
     pub readme_scroll: u16,
     pub show_readme: bool,
     pub readme_rendered: bool,
@@ -96,7 +93,10 @@ pub struct App {
     pub palette_query: String,
     pub palette_selected: usize,
     pub pending_lazygit: Option<PathBuf>,
+    pub pending_shell: Option<PathBuf>,
     pub flash: Option<(String, Instant)>,
+    pub last_auto_fetch: Option<Instant>,
+    pub is_fetching: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,6 +106,7 @@ pub enum Cmd {
     ToggleShowHidden,
     OpenEditor,
     OpenLazyGit,
+    OpenShell,
     OpenGitHub,
     CopyPath,
     RefreshAll,
@@ -114,8 +115,6 @@ pub enum Cmd {
     ToggleDetail,
     FocusStatus,
     FocusDiff,
-    FocusHistory,
-    FocusReleases,
     Quit,
 }
 
@@ -157,6 +156,12 @@ pub fn all_commands() -> &'static [CmdInfo] {
             name: "open in lazygit",
             keys: "o",
             desc: "launch lazygit on the repo (suspends den)",
+        },
+        CmdInfo {
+            cmd: Cmd::OpenShell,
+            name: "open shell at repo",
+            keys: "s",
+            desc: "drop into $SHELL in the repo (suspends den)",
         },
         CmdInfo {
             cmd: Cmd::OpenGitHub,
@@ -207,18 +212,6 @@ pub fn all_commands() -> &'static [CmdInfo] {
             desc: "focus the diff section in detail",
         },
         CmdInfo {
-            cmd: Cmd::FocusHistory,
-            name: "focus history",
-            keys: "3",
-            desc: "focus the history section in detail",
-        },
-        CmdInfo {
-            cmd: Cmd::FocusReleases,
-            name: "focus releases",
-            keys: "4",
-            desc: "focus the releases section in detail",
-        },
-        CmdInfo {
             cmd: Cmd::Quit,
             name: "quit",
             keys: "q",
@@ -250,8 +243,6 @@ impl App {
         match self.focus {
             DetailSection::Status => &mut self.status_scroll,
             DetailSection::Diff => &mut self.diff_scroll,
-            DetailSection::History => &mut self.history_scroll,
-            DetailSection::Releases => &mut self.releases_scroll,
         }
     }
     pub fn flash_msg(&mut self, s: impl Into<String>) {
@@ -327,6 +318,33 @@ fn main() -> Result<()> {
         let _ = debouncer.watcher().watch(p, RecursiveMode::Recursive);
     }
 
+    let (fetch_tx, fetch_rx) = mpsc::channel::<FetchMsg>();
+    if args.fetch_interval > 0 {
+        let interval = Duration::from_secs(args.fetch_interval);
+        let paths = repo_paths.clone();
+        let tx = fetch_tx.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(15));
+            loop {
+                let _ = tx.send(FetchMsg::CycleStarted);
+                for p in &paths {
+                    let _ = Command::new("git")
+                        .env("GIT_TERMINAL_PROMPT", "0")
+                        .arg("-C")
+                        .arg(p)
+                        .args(["fetch", "--quiet", "--no-write-fetch-head", "--all"])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                    let _ = tx.send(FetchMsg::Done(p.clone()));
+                }
+                let _ = tx.send(FetchMsg::CycleFinished);
+                std::thread::sleep(interval);
+            }
+        });
+    }
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -344,20 +362,12 @@ fn main() -> Result<()> {
         detail_cache_key: None,
         status_content: String::new(),
         diff_content: String::new(),
-        history_content: String::new(),
         release_tag: String::new(),
         release_time_unix: 0,
-        release_subject: String::new(),
-        release_body: String::new(),
-        release_notes_path: String::new(),
-        release_notes_content: String::new(),
-        releases_rendered: true,
         readme_content: String::new(),
         readme_path: String::new(),
         status_scroll: 0,
         diff_scroll: 0,
-        history_scroll: 0,
-        releases_scroll: 0,
         readme_scroll: 0,
         show_readme: false,
         readme_rendered: true,
@@ -368,10 +378,13 @@ fn main() -> Result<()> {
         palette_query: String::new(),
         palette_selected: 0,
         pending_lazygit: None,
+        pending_shell: None,
         flash: None,
+        last_auto_fetch: None,
+        is_fetching: false,
     };
 
-    let res = run(&mut terminal, &mut app, &rx);
+    let res = run(&mut terminal, &mut app, &rx, &fetch_rx);
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -384,6 +397,7 @@ fn run<B: ratatui::backend::Backend + std::io::Write>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     rx: &mpsc::Receiver<DebounceEventResult>,
+    fetch_rx: &mpsc::Receiver<FetchMsg>,
 ) -> Result<()>
 where
     <B as ratatui::backend::Backend>::Error: Send + Sync + 'static,
@@ -477,16 +491,6 @@ where
                         app.show_readme = false;
                         app.focus = DetailSection::Diff;
                     }
-                    KeyCode::Char('3') => {
-                        app.show_detail = true;
-                        app.show_readme = false;
-                        app.focus = DetailSection::History;
-                    }
-                    KeyCode::Char('4') => {
-                        app.show_detail = true;
-                        app.show_readme = false;
-                        app.focus = DetailSection::Releases;
-                    }
                     KeyCode::Char('i') => {
                         app.show_detail = true;
                         app.show_readme = !app.show_readme;
@@ -495,9 +499,6 @@ where
                         if app.show_readme {
                             app.readme_rendered = !app.readme_rendered;
                             app.readme_scroll = 0;
-                        } else if app.show_detail && app.focus == DetailSection::Releases {
-                            app.releases_rendered = !app.releases_rendered;
-                            app.releases_scroll = 0;
                         }
                     }
                     KeyCode::Char('x') => toggle_hidden(app),
@@ -520,6 +521,7 @@ where
                     KeyCode::Char('p') => toggle_pin(app),
                     KeyCode::Char('e') => action_editor(app),
                     KeyCode::Char('o') => action_lazygit(app),
+                    KeyCode::Char('s') => action_shell(app),
                     KeyCode::Char('g') => action_github(app),
                     KeyCode::Char('y') => action_copy_path(app),
                     _ => {}
@@ -551,6 +553,27 @@ where
             }
         }
 
+        let selected_path_for_fetch = app.repos.get(app.selected).map(|r| r.path.clone());
+        while let Ok(msg) = fetch_rx.try_recv() {
+            match msg {
+                FetchMsg::CycleStarted => {
+                    app.is_fetching = true;
+                }
+                FetchMsg::Done(p) => {
+                    if let Some(idx) = app.repos.iter().position(|r| r.path == p) {
+                        app.repos[idx] = status_for(&p);
+                    }
+                    if selected_path_for_fetch.as_ref() == Some(&p) {
+                        app.detail_cache_key = None;
+                    }
+                }
+                FetchMsg::CycleFinished => {
+                    app.last_auto_fetch = Some(Instant::now());
+                    app.is_fetching = false;
+                }
+            }
+        }
+
         if app.last_refresh.elapsed() > Duration::from_secs(30) {
             refresh_all(app);
         }
@@ -571,6 +594,22 @@ where
             match status {
                 Ok(_) => app.flash_msg("returned from lazygit"),
                 Err(e) => app.flash_msg(format!("lazygit failed: {}", e)),
+            }
+            refresh_all(app);
+            app.detail_cache_key = None;
+        }
+
+        if let Some(path) = app.pending_shell.take() {
+            disable_raw_mode()?;
+            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+            let status = Command::new(&shell).current_dir(&path).status();
+            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+            enable_raw_mode()?;
+            terminal.clear()?;
+            match status {
+                Ok(_) => app.flash_msg("returned from shell"),
+                Err(e) => app.flash_msg(format!("shell failed: {}", e)),
             }
             refresh_all(app);
             app.detail_cache_key = None;
@@ -625,32 +664,16 @@ fn ensure_detail(app: &mut App) {
     let path = repo.path.clone();
     app.status_content = fetch_status(&path);
     app.diff_content = fetch_diff(&path);
-    app.history_content = fetch_history(&path);
-    let r = fetch_release(&path);
-    app.release_tag = r.tag;
-    app.release_time_unix = r.time_unix;
-    app.release_subject = r.subject;
-    app.release_body = r.body;
-    app.release_notes_path = r.notes_path;
-    app.release_notes_content = r.notes_content;
+    let (tag, time_unix) = fetch_release(&path);
+    app.release_tag = tag;
+    app.release_time_unix = time_unix;
     let (readme_path, readme_content) = fetch_readme(&path);
     app.readme_path = readme_path;
     app.readme_content = readme_content;
     app.status_scroll = 0;
     app.diff_scroll = 0;
-    app.history_scroll = 0;
-    app.releases_scroll = 0;
     app.readme_scroll = 0;
     app.detail_cache_key = Some(path);
-}
-
-struct LatestRelease {
-    tag: String,
-    time_unix: u64,
-    subject: String,
-    body: String,
-    notes_path: String,
-    notes_content: String,
 }
 
 fn run_git(path: &Path, args: &[&str]) -> String {
@@ -670,25 +693,12 @@ fn fetch_status(path: &Path) -> String {
 }
 
 fn fetch_diff(path: &Path) -> String {
-    let s = run_git(path, &["diff", "HEAD", "--no-color", "--stat=200", "--patch"]);
+    let s = run_git(path, &["diff", "HEAD", "--no-color", "--patch"]);
     if s.trim().is_empty() {
         run_git(path, &["diff", "--no-color", "--cached", "--patch"])
     } else {
         s
     }
-}
-
-fn fetch_history(path: &Path) -> String {
-    run_git(
-        path,
-        &[
-            "log",
-            "-n",
-            "30",
-            "--no-color",
-            "--pretty=format:%h\x1f%ar\x1f%an\x1f%s",
-        ],
-    )
 }
 
 fn fetch_readme(path: &Path) -> (String, String) {
@@ -712,62 +722,31 @@ fn fetch_readme(path: &Path) -> (String, String) {
     (String::new(), String::new())
 }
 
-fn fetch_release(path: &Path) -> LatestRelease {
-    let mut out = LatestRelease {
-        tag: String::new(),
-        time_unix: 0,
-        subject: String::new(),
-        body: String::new(),
-        notes_path: String::new(),
-        notes_content: String::new(),
-    };
+fn fetch_release(path: &Path) -> (String, u64) {
     let raw = run_git(
         path,
         &[
             "for-each-ref",
             "--sort=-creatordate",
-            "--format=%(refname:short)\x1f%(creatordate:unix)\x1f%(contents:subject)\x1f%(contents:body)",
+            "--format=%(refname:short)\x1f%(creatordate:unix)",
             "refs/tags",
             "--count=1",
         ],
     );
     if raw.trim().is_empty() || raw.starts_with("git ") {
-        return out;
+        return (String::new(), 0);
     }
     let line = raw.lines().next().unwrap_or("");
-    let parts: Vec<&str> = line.splitn(4, '\x1f').collect();
-    if parts.is_empty() || parts[0].trim().is_empty() {
-        return out;
+    let mut parts = line.splitn(2, '\x1f');
+    let name = parts.next().unwrap_or("").trim().to_string();
+    if name.is_empty() {
+        return (String::new(), 0);
     }
-    let name = parts[0].trim().to_string();
-    out.time_unix = parts
-        .get(1)
+    let time_unix: u64 = parts
+        .next()
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0);
-    out.subject = parts.get(2).copied().unwrap_or("").to_string();
-    out.body = parts.get(3).copied().unwrap_or("").to_string();
-
-    let candidates = [
-        format!("releases/{}.md", name),
-        format!("releases/{}/README.md", name),
-        format!("releases/{}/index.md", name),
-        format!("releases/{}/notes.md", name),
-        format!("releases/{}/CHANGELOG.md", name),
-        "CHANGELOG.md".to_string(),
-        "RELEASES.md".to_string(),
-    ];
-    for c in &candidates {
-        let p = path.join(c);
-        if p.is_file() {
-            if let Ok(s) = std::fs::read_to_string(&p) {
-                out.notes_path = c.clone();
-                out.notes_content = s;
-                break;
-            }
-        }
-    }
-    out.tag = name;
-    out
+    (name, time_unix)
 }
 
 fn config_path(name: &str) -> PathBuf {
@@ -862,6 +841,12 @@ fn action_lazygit(app: &mut App) {
     }
 }
 
+fn action_shell(app: &mut App) {
+    if let Some(repo) = app.repos.get(app.selected) {
+        app.pending_shell = Some(repo.path.clone());
+    }
+}
+
 fn action_github(app: &mut App) {
     let Some(repo) = app.repos.get(app.selected) else {
         return;
@@ -953,6 +938,7 @@ fn execute_cmd(app: &mut App, cmd: Cmd) -> Option<bool> {
         }
         Cmd::OpenEditor => action_editor(app),
         Cmd::OpenLazyGit => action_lazygit(app),
+        Cmd::OpenShell => action_shell(app),
         Cmd::OpenGitHub => action_github(app),
         Cmd::CopyPath => action_copy_path(app),
         Cmd::RefreshAll => {
@@ -971,11 +957,8 @@ fn execute_cmd(app: &mut App, cmd: Cmd) -> Option<bool> {
             if app.show_readme {
                 app.readme_rendered = !app.readme_rendered;
                 app.readme_scroll = 0;
-            } else if app.show_detail && app.focus == DetailSection::Releases {
-                app.releases_rendered = !app.releases_rendered;
-                app.releases_scroll = 0;
             } else {
-                app.flash_msg("open readme or focus releases first");
+                app.flash_msg("open readme first");
             }
         }
         Cmd::FocusStatus => {
@@ -987,16 +970,6 @@ fn execute_cmd(app: &mut App, cmd: Cmd) -> Option<bool> {
             app.show_detail = true;
             app.show_readme = false;
             app.focus = DetailSection::Diff;
-        }
-        Cmd::FocusHistory => {
-            app.show_detail = true;
-            app.show_readme = false;
-            app.focus = DetailSection::History;
-        }
-        Cmd::FocusReleases => {
-            app.show_detail = true;
-            app.show_readme = false;
-            app.focus = DetailSection::Releases;
         }
         Cmd::Quit => return Some(true),
     }
