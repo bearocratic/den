@@ -336,7 +336,7 @@ fn main() -> Result<()> {
     let mut app = App {
         repos: statuses,
         selected: 0,
-        show_detail: false,
+        show_detail: true,
         base: base.clone(),
         cols: 1,
         last_refresh: Instant::now(),

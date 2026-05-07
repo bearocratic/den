@@ -10,6 +10,92 @@ use std::time::{Duration, SystemTime};
 
 const TILE_MIN_W: u16 = 32;
 const TILE_H: u16 = 7;
+const MAX_COLS: usize = 4;
+const SECTION_HEADER_H: u16 = 1;
+const SECTION_GAP_H: u16 = 1;
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum SectionKind {
+    Conflicts,
+    Dirty,
+    Clean,
+    Hidden,
+}
+
+impl SectionKind {
+    fn label(self) -> &'static str {
+        match self {
+            SectionKind::Conflicts => "conflicts",
+            SectionKind::Dirty => "dirty",
+            SectionKind::Clean => "clean",
+            SectionKind::Hidden => "hidden",
+        }
+    }
+
+    fn color(self) -> ratatui::style::Color {
+        match self {
+            SectionKind::Conflicts => CONFLICT,
+            SectionKind::Dirty => AMBER,
+            SectionKind::Clean => FOREST,
+            SectionKind::Hidden => STONE_STRONG,
+        }
+    }
+}
+
+fn classify(app: &App, repo: &RepoStatus) -> SectionKind {
+    if app.hidden.contains(&repo.path) {
+        return SectionKind::Hidden;
+    }
+    if repo.has_conflict() || repo.error.is_some() {
+        return SectionKind::Conflicts;
+    }
+    if !repo.is_clean() {
+        return SectionKind::Dirty;
+    }
+    SectionKind::Clean
+}
+
+fn group_by_section(app: &App, order: &[usize]) -> Vec<(SectionKind, Vec<usize>)> {
+    let mut conflicts = Vec::new();
+    let mut dirty = Vec::new();
+    let mut clean = Vec::new();
+    let mut hidden = Vec::new();
+    for &i in order {
+        let r = &app.repos[i];
+        match classify(app, r) {
+            SectionKind::Conflicts => conflicts.push(i),
+            SectionKind::Dirty => dirty.push(i),
+            SectionKind::Clean => clean.push(i),
+            SectionKind::Hidden => hidden.push(i),
+        }
+    }
+    [
+        (SectionKind::Conflicts, conflicts),
+        (SectionKind::Dirty, dirty),
+        (SectionKind::Clean, clean),
+        (SectionKind::Hidden, hidden),
+    ]
+    .into_iter()
+    .filter(|(_, v)| !v.is_empty())
+    .collect()
+}
+
+fn render_section_header(f: &mut Frame, area: Rect, kind: SectionKind, count: usize) {
+    let label = kind.label();
+    let count_str = format!(" {} ", count);
+    let prefix_len = 3 + label.len() + count_str.len() + 1;
+    let trailing = (area.width as usize).saturating_sub(prefix_len);
+    let line = Line::from(vec![
+        Span::styled("── ", Style::default().fg(STONE_STRONG)),
+        Span::styled(
+            label,
+            Style::default().fg(kind.color()).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(count_str, Style::default().fg(STONE)),
+        Span::styled("─".repeat(trailing), Style::default().fg(STONE_STRONG)),
+    ]);
+    f.render_widget(Paragraph::new(line), area);
+}
 
 pub fn render(f: &mut Frame, app: &mut App) {
     let size = f.area();
@@ -251,43 +337,72 @@ fn render_grid(f: &mut Frame, area: Rect, app: &mut App) {
         return;
     }
 
-    let cols = ((area.width / TILE_MIN_W).max(1)) as usize;
+    let avail_cols = ((area.width / TILE_MIN_W).max(1)) as usize;
+    let cols = avail_cols.min(MAX_COLS);
     app.cols = cols;
     let order = crate::display_order(app);
-    let row_count = (order.len() + cols - 1) / cols;
-    let row_constraints: Vec<Constraint> =
-        (0..row_count).map(|_| Constraint::Length(TILE_H)).collect();
-    let rows = Layout::default()
+    let groups = group_by_section(app, &order);
+
+    let mut constraints: Vec<Constraint> = Vec::new();
+    for (i, (_, indices)) in groups.iter().enumerate() {
+        if i > 0 {
+            constraints.push(Constraint::Length(SECTION_GAP_H));
+        }
+        constraints.push(Constraint::Length(SECTION_HEADER_H));
+        let n_rows = (indices.len() + cols - 1) / cols;
+        for _ in 0..n_rows {
+            constraints.push(Constraint::Length(TILE_H));
+        }
+    }
+    constraints.push(Constraint::Min(0));
+
+    let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(row_constraints)
+        .constraints(constraints)
         .split(area);
 
     let col_constraints: Vec<Constraint> = (0..cols)
         .map(|_| Constraint::Ratio(1, cols as u32))
         .collect();
 
-    for r in 0..row_count {
-        let cells = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(col_constraints.clone())
-            .split(rows[r]);
-        for c in 0..cols {
-            let i = r * cols + c;
-            if i >= order.len() {
+    let mut chunk_idx = 0;
+    for (i, (kind, indices)) in groups.iter().enumerate() {
+        if i > 0 {
+            chunk_idx += 1;
+        }
+        if chunk_idx >= chunks.len() {
+            break;
+        }
+        render_section_header(f, chunks[chunk_idx], *kind, indices.len());
+        chunk_idx += 1;
+        let n_rows = (indices.len() + cols - 1) / cols;
+        for r in 0..n_rows {
+            if chunk_idx >= chunks.len() {
                 break;
             }
-            let repo_idx = order[i];
-            let repo = &app.repos[repo_idx];
-            let pinned = app.pinned.contains(&repo.path);
-            let hidden = app.hidden.contains(&repo.path);
-            render_tile(
-                f,
-                cells[c],
-                repo,
-                repo_idx == app.selected,
-                pinned,
-                hidden,
-            );
+            let cells = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(col_constraints.clone())
+                .split(chunks[chunk_idx]);
+            for c in 0..cols {
+                let k = r * cols + c;
+                if k >= indices.len() {
+                    break;
+                }
+                let repo_idx = indices[k];
+                let repo = &app.repos[repo_idx];
+                let pinned = app.pinned.contains(&repo.path);
+                let hidden = app.hidden.contains(&repo.path);
+                render_tile(
+                    f,
+                    cells[c],
+                    repo,
+                    repo_idx == app.selected,
+                    pinned,
+                    hidden,
+                );
+            }
+            chunk_idx += 1;
         }
     }
 }
