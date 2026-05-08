@@ -55,6 +55,11 @@ enum Subcmd {
         /// Session id (from `den ls`)
         id: String,
     },
+    /// Open a saved session by id, reusing its base folders
+    Open {
+        /// Session id (from `den ls`)
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -384,6 +389,9 @@ fn state_priority(r: &RepoStatus) -> u8 {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    session::migrate_session_dirs();
+
+    let mut bases: Vec<PathBuf> = Vec::new();
     match &args.command {
         Some(Subcmd::Ls) => {
             let sessions = session::list_sessions();
@@ -411,12 +419,27 @@ fn main() -> Result<()> {
             println!("forgot {}", id);
             return Ok(());
         }
-        None => {}
-    }
-
-    let mut bases: Vec<PathBuf> = Vec::with_capacity(args.paths.len());
-    for p in &args.paths {
-        bases.push(p.canonicalize()?);
+        Some(Subcmd::Open { id }) => {
+            let bases_file = session::session_dir(id).join("bases.txt");
+            let raw = std::fs::read_to_string(&bases_file).map_err(|_| {
+                anyhow::anyhow!("no session with id {}", id)
+            })?;
+            for line in raw.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                bases.push(PathBuf::from(line).canonicalize()?);
+            }
+            if bases.is_empty() {
+                anyhow::bail!("session {} has no recorded bases", id);
+            }
+        }
+        None => {
+            for p in &args.paths {
+                bases.push(p.canonicalize()?);
+            }
+        }
     }
 
     step_start(&format!(
@@ -465,7 +488,7 @@ fn main() -> Result<()> {
         );
     }
 
-    let session_id = session::session_id(&bases);
+    let session_id = session::resolve_session(&bases);
     let session_dir = session::session_dir(&session_id);
     let migrated = session::migrate_legacy(&session_id);
     if migrated {
@@ -473,7 +496,7 @@ fn main() -> Result<()> {
     }
     let pinned = session::load_path_set(&session_dir.join("pins.txt"));
     let hidden = session::load_path_set(&session::den_dir().join("hidden.txt"));
-    let settings = session::load_settings(&session_dir.join("settings.kv"));
+    let settings = session::load_settings(&session_id);
     let bases_strings: Vec<String> = bases
         .iter()
         .map(|p| p.display().to_string())
@@ -1082,9 +1105,8 @@ fn save_hidden(app: &App) {
 }
 
 fn save_settings(app: &App) {
-    let p = session::session_dir(&app.session_id).join("settings.kv");
     session::save_settings(
-        &p,
+        &app.session_id,
         &session::Settings {
             sort_ci_first: app.sort_ci_first,
             show_hidden: app.show_hidden,
