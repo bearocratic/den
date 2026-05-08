@@ -7,12 +7,22 @@ terminal. Background `git fetch` keeps ahead/behind counts live.
 
 ## Install
 
+Homebrew (macOS, Linux):
+
 ```sh
 brew tap bearocratic/tap
 brew install den
+# upgrade later with: brew upgrade den
 ```
 
-Upgrade later with `brew upgrade den`.
+Cargo (any platform with a Rust toolchain):
+
+```sh
+cargo install --git https://github.com/bearocratic/den    # latest main
+cargo install --git https://github.com/bearocratic/den --tag v0.6.0   # pinned
+```
+
+The binary lands in `~/.cargo/bin/den`.
 
 ## Usage
 
