@@ -1,6 +1,6 @@
 use crate::brand::{AMBER, AMBER_STRONG, CONFLICT, FOREST, IVORY, STONE, STONE_STRONG};
 use crate::repo::RepoStatus;
-use crate::{App, CiInfo, CiState, DetailSection};
+use crate::{App, CiInfo, CiState, DetailSection, SortMode};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -71,10 +71,11 @@ fn group_by_section(app: &App, order: &[usize]) -> Vec<(SectionKind, Vec<usize>)
     let mut dirty = Vec::new();
     let mut clean = Vec::new();
     let mut hidden = Vec::new();
+    let promote_ci = app.sort_mode == SortMode::CiRedFirst;
     for &i in order {
         let r = &app.repos[i];
         let kind = classify(app, r);
-        if app.sort_ci_first
+        if promote_ci
             && kind != SectionKind::Hidden
             && app.ci.get(&r.path).map(|c| c.state) == Some(CiState::Failure)
         {
@@ -466,7 +467,7 @@ fn render_grid(f: &mut Frame, area: Rect, app: &mut App) {
                 let hidden = app.hidden.contains(&repo.path);
                 let ci = app.ci.get(&repo.path).map(|c| c.state);
                 let is_fetching = app.fetching.contains(&repo.path);
-                let pr_count = app.prs.get(&repo.path).copied().unwrap_or(0);
+                let pr_count = app.prs.get(&repo.path).map(|v| v.len()).unwrap_or(0);
                 render_tile(
                     f,
                     cells[c],
@@ -698,6 +699,10 @@ fn render_detail(f: &mut Frame, area: Rect, app: &App) {
         render_stash(f, inner, app);
         return;
     }
+    if app.show_prs {
+        render_prs(f, inner, app);
+        return;
+    }
 
     let mut status_lines = parse_status(&app.status_content);
     if let Some(info) = app.ci.get(&repo.path) {
@@ -733,6 +738,85 @@ fn render_detail(f: &mut Frame, area: Rect, app: &App) {
         parse_diff(&app.diff_content),
         app.diff_scroll,
     );
+}
+
+fn render_prs(f: &mut Frame, area: Rect, app: &App) {
+    let total: usize = app.prs.values().map(|v| v.len()).sum();
+    let header = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(AMBER_STRONG))
+        .title(Line::from(vec![Span::styled(
+            format!(" open PRs · {} total ", total),
+            Style::default()
+                .fg(AMBER_STRONG)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        )]));
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(0)])
+        .split(area);
+    f.render_widget(header, chunks[0]);
+
+    if total == 0 {
+        let p = Paragraph::new(Line::from(Span::styled(
+            "no open PRs",
+            Style::default().fg(STONE),
+        )));
+        f.render_widget(p, chunks[1]);
+        return;
+    }
+
+    let mut pairs: Vec<(&str, &crate::PrInfo)> = Vec::new();
+    for repo in &app.repos {
+        let name = repo.name.as_str();
+        if let Some(list) = app.prs.get(&repo.path) {
+            for pr in list {
+                pairs.push((name, pr));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| a.0.cmp(b.0));
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (repo_name, pr) in pairs {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("#{:<5}", pr.number),
+                Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                format!("{:<14}", truncate(repo_name, 14)),
+                Style::default().fg(STONE_STRONG),
+            ),
+            Span::raw(" "),
+            Span::styled(pr.title.clone(), Style::default().fg(IVORY)),
+            Span::raw("  "),
+            Span::styled(pr.age.clone(), Style::default().fg(STONE)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw("       "),
+            Span::styled(
+                pr.url.clone(),
+                Style::default()
+                    .fg(STONE)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+        ]));
+    }
+    let para = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((app.prs_scroll, 0));
+    f.render_widget(para, chunks[1]);
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    let mut out: String = s.chars().take(n).collect();
+    if s.chars().count() > n {
+        out.pop();
+        out.push('…');
+    }
+    out
 }
 
 fn render_stash(f: &mut Frame, area: Rect, app: &App) {

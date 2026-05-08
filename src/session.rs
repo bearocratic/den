@@ -160,7 +160,7 @@ pub fn save_lines(file: &Path, lines: &[String]) {
 #[derive(Default, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
-    pub sort_ci_first: bool,
+    pub sort_mode: String,
     #[serde(default)]
     pub show_hidden: bool,
     #[serde(default)]
@@ -209,7 +209,12 @@ fn parse_legacy_kv(content: &str) -> Settings {
             continue;
         };
         match k.trim() {
-            "sort_ci_first" => s.sort_ci_first = v.trim() == "true",
+            "sort_ci_first" => {
+                if v.trim() == "true" {
+                    s.sort_mode = "ci_red_first".to_string();
+                }
+            }
+            "sort_mode" => s.sort_mode = v.trim().to_string(),
             "show_hidden" => s.show_hidden = v.trim() == "true",
             "last_filter" => s.last_filter = v.trim().to_string(),
             _ => {}

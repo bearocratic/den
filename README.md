@@ -49,8 +49,8 @@ State lives under `~/.den/`:
   stays muted everywhere).
 - `~/.den/sessions/<id>/` — one folder per unique combination of base
   directories you opened with. Holds `pins.txt`, `bases.txt`, and
-  `settings.kv` (sort mode, show-hidden, last filter). Run `den ls` to
-  list, `den forget <id>` to delete one.
+  `settings.toml` (sort mode, show-hidden, last filter). Run `den ls` to
+  list, `den open <id>` to relaunch, `den forget <id>` to delete one.
 
 Existing `~/.config/den/{pins,hidden}.txt` from earlier versions is
 migrated into the new layout on first launch.
@@ -67,8 +67,10 @@ migrated into the new layout on first launch.
 | `p` / `x` | Pin / hide focused repo |
 | `e` / `o` / `s` / `g` / `A` | Open in editor / lazygit / shell / GitHub / GitHub Actions |
 | `r` / `F` / `P` | Refresh all / fetch focused / pull focused |
-| `i` / `S` | README overlay / stash overlay |
-| `O` | Toggle "CI red first" sort |
+| `y` / `Y` | Copy repo path / GitHub URL |
+| `i` / `S` / `L` | README / stash / open-PRs overlay |
+| `O` | Cycle sort: default → ci red first → dirty first → by recency |
+| `b` | Cycle base filter (when watching multiple bases) |
 | `q` | Quit |
 
 ## Optional integrations

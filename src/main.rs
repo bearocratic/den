@@ -68,7 +68,7 @@ pub enum FetchMsg {
     Started(PathBuf),
     Done(PathBuf),
     CiUpdate(PathBuf, Option<CiInfo>),
-    PrUpdate(PathBuf, Option<usize>),
+    PrUpdate(PathBuf, Option<Vec<PrInfo>>),
     CycleFinished,
 }
 
@@ -78,6 +78,14 @@ pub enum CiState {
     Failure,
     Running,
     Unknown,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrInfo {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub age: String,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +100,49 @@ pub struct CiInfo {
 pub enum DetailSection {
     Status,
     Diff,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortMode {
+    Default,
+    CiRedFirst,
+    DirtyFirst,
+    ByRecency,
+}
+
+impl SortMode {
+    pub fn next(self) -> Self {
+        match self {
+            SortMode::Default => SortMode::CiRedFirst,
+            SortMode::CiRedFirst => SortMode::DirtyFirst,
+            SortMode::DirtyFirst => SortMode::ByRecency,
+            SortMode::ByRecency => SortMode::Default,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            SortMode::Default => "default",
+            SortMode::CiRedFirst => "ci red first",
+            SortMode::DirtyFirst => "dirty first",
+            SortMode::ByRecency => "by recency",
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SortMode::Default => "default",
+            SortMode::CiRedFirst => "ci_red_first",
+            SortMode::DirtyFirst => "dirty_first",
+            SortMode::ByRecency => "by_recency",
+        }
+    }
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "ci_red_first" => SortMode::CiRedFirst,
+            "dirty_first" => SortMode::DirtyFirst,
+            "by_recency" => SortMode::ByRecency,
+            _ => SortMode::Default,
+        }
+    }
 }
 
 impl DetailSection {
@@ -114,6 +165,7 @@ pub struct App {
     pub selected: usize,
     pub show_detail: bool,
     pub bases: Vec<PathBuf>,
+    pub base_filter: Option<usize>,
     pub cols: usize,
     pub last_refresh: Instant,
     pub focus: DetailSection,
@@ -146,8 +198,10 @@ pub struct App {
     pub is_fetching: bool,
     pub fetching: HashSet<PathBuf>,
     pub ci: std::collections::HashMap<PathBuf, CiInfo>,
-    pub prs: std::collections::HashMap<PathBuf, usize>,
-    pub sort_ci_first: bool,
+    pub prs: std::collections::HashMap<PathBuf, Vec<PrInfo>>,
+    pub show_prs: bool,
+    pub prs_scroll: u16,
+    pub sort_mode: SortMode,
     pub session_id: String,
 }
 
@@ -162,8 +216,11 @@ pub enum Cmd {
     OpenGitHub,
     OpenActions,
     ToggleStash,
+    TogglePrs,
     ToggleSortCi,
+    CycleBase,
     CopyPath,
+    CopyUrl,
     RefreshAll,
     FetchFocused,
     PullFocused,
@@ -239,16 +296,34 @@ pub fn all_commands() -> &'static [CmdInfo] {
             desc: "show stash entries for the focused repo",
         },
         CmdInfo {
+            cmd: Cmd::TogglePrs,
+            name: "open PRs",
+            keys: "L",
+            desc: "list open PRs across all watched repos",
+        },
+        CmdInfo {
             cmd: Cmd::ToggleSortCi,
-            name: "sort: ci red first",
+            name: "cycle sort mode",
             keys: "O",
-            desc: "toggle a leading section that surfaces CI failures",
+            desc: "cycle: default → ci red first → dirty first → by recency",
+        },
+        CmdInfo {
+            cmd: Cmd::CycleBase,
+            name: "cycle base filter",
+            keys: "b",
+            desc: "narrow the grid to one base, or all (multi-base only)",
         },
         CmdInfo {
             cmd: Cmd::CopyPath,
             name: "copy path",
             keys: "y",
             desc: "copy the repo path to clipboard",
+        },
+        CmdInfo {
+            cmd: Cmd::CopyUrl,
+            name: "copy github url",
+            keys: "Y",
+            desc: "copy the repo's GitHub URL to clipboard",
         },
         CmdInfo {
             cmd: Cmd::RefreshAll,
@@ -327,6 +402,9 @@ impl App {
         if self.show_readme {
             return &mut self.readme_scroll;
         }
+        if self.show_prs {
+            return &mut self.prs_scroll;
+        }
         match self.focus {
             DetailSection::Status => &mut self.status_scroll,
             DetailSection::Diff => &mut self.diff_scroll,
@@ -348,6 +426,13 @@ pub fn display_order(app: &App) -> Vec<usize> {
             if !q.is_empty() && !r.name.to_lowercase().contains(&q) {
                 return false;
             }
+            if let Some(bi) = app.base_filter {
+                if let Some(base) = app.bases.get(bi) {
+                    if !r.path.starts_with(base) {
+                        return false;
+                    }
+                }
+            }
             true
         })
         .collect();
@@ -364,10 +449,28 @@ pub fn display_order(app: &App) -> Vec<usize> {
         if pa != pb {
             return pb.cmp(&pa);
         }
-        let prio_a = state_priority(ra);
-        let prio_b = state_priority(rb);
-        if prio_a != prio_b {
-            return prio_a.cmp(&prio_b);
+        match app.sort_mode {
+            SortMode::DirtyFirst => {
+                let pa = state_priority(ra);
+                let pb = state_priority(rb);
+                if pa != pb {
+                    return pa.cmp(&pb);
+                }
+            }
+            SortMode::ByRecency => {
+                let ta = ra.last_commit.as_ref().map(|c| c.time);
+                let tb = rb.last_commit.as_ref().map(|c| c.time);
+                if ta != tb {
+                    return tb.cmp(&ta);
+                }
+            }
+            _ => {
+                let pa = state_priority(ra);
+                let pb = state_priority(rb);
+                if pa != pb {
+                    return pa.cmp(&pb);
+                }
+            }
         }
         ra.name.cmp(&rb.name)
     });
@@ -575,6 +678,7 @@ fn main() -> Result<()> {
         selected: 0,
         show_detail: true,
         bases: bases.clone(),
+        base_filter: None,
         cols: 1,
         last_refresh: Instant::now(),
         focus: DetailSection::Status,
@@ -608,7 +712,9 @@ fn main() -> Result<()> {
         fetching: HashSet::new(),
         ci: std::collections::HashMap::new(),
         prs: std::collections::HashMap::new(),
-        sort_ci_first: settings.sort_ci_first,
+        show_prs: false,
+        prs_scroll: 0,
+        sort_mode: SortMode::from_str(&settings.sort_mode),
         session_id: session_id.clone(),
     };
     if !settings.last_filter.is_empty() {
@@ -762,7 +868,14 @@ where
                     KeyCode::Char('S') => {
                         app.show_detail = true;
                         app.show_readme = false;
+                        app.show_prs = false;
                         app.show_stash = !app.show_stash;
+                    }
+                    KeyCode::Char('L') => {
+                        app.show_detail = true;
+                        app.show_readme = false;
+                        app.show_stash = false;
+                        app.show_prs = !app.show_prs;
                     }
                     KeyCode::Char('m') => {
                         if app.show_readme {
@@ -794,16 +907,16 @@ where
                     KeyCode::Char('s') => action_shell(app),
                     KeyCode::Char('g') => action_github(app),
                     KeyCode::Char('A') => action_actions(app),
+                    KeyCode::Char('b') => {
+                        cycle_base_filter(app);
+                    }
                     KeyCode::Char('O') => {
-                        app.sort_ci_first = !app.sort_ci_first;
-                        app.flash_msg(if app.sort_ci_first {
-                            "sort: ci red first"
-                        } else {
-                            "sort: default"
-                        });
+                        app.sort_mode = app.sort_mode.next();
+                        app.flash_msg(format!("sort: {}", app.sort_mode.label()));
                         save_settings(app);
                     }
                     KeyCode::Char('y') => action_copy_path(app),
+                    KeyCode::Char('Y') => action_copy_url(app),
                     _ => {}
                 }
             }
@@ -853,18 +966,37 @@ where
                 }
                 FetchMsg::CiUpdate(p, info) => {
                     app.fetching.remove(&p);
+                    let old_state = app.ci.get(&p).map(|c| c.state);
+                    let name = app
+                        .repos
+                        .iter()
+                        .find(|r| r.path == p)
+                        .map(|r| r.name.clone())
+                        .unwrap_or_default();
                     match info {
                         Some(s) => {
-                            app.ci.insert(p, s);
+                            let new_state = s.state;
+                            app.ci.insert(p.clone(), s);
+                            if old_state == Some(CiState::Running)
+                                && (new_state == CiState::Success
+                                    || new_state == CiState::Failure)
+                            {
+                                let label = match new_state {
+                                    CiState::Success => "passed",
+                                    CiState::Failure => "failed",
+                                    _ => "",
+                                };
+                                app.flash_msg(format!("CI {} on {}", label, name));
+                            }
                         }
                         None => {
                             app.ci.remove(&p);
                         }
                     }
                 }
-                FetchMsg::PrUpdate(p, count) => match count {
-                    Some(n) if n > 0 => {
-                        app.prs.insert(p, n);
+                FetchMsg::PrUpdate(p, prs) => match prs {
+                    Some(list) if !list.is_empty() => {
+                        app.prs.insert(p, list);
                     }
                     _ => {
                         app.prs.remove(&p);
@@ -944,6 +1076,30 @@ fn refresh_one_with_flash(app: &mut App, idx: usize, path: &Path) {
             app.flash_msg(format!("{} went dirty", name));
         }
     }
+}
+
+fn cycle_base_filter(app: &mut App) {
+    if app.bases.len() <= 1 {
+        app.flash_msg("only one base watched");
+        return;
+    }
+    app.base_filter = match app.base_filter {
+        None => Some(0),
+        Some(i) if i + 1 < app.bases.len() => Some(i + 1),
+        Some(_) => None,
+    };
+    let label = match app.base_filter {
+        None => "base: all".to_string(),
+        Some(i) => format!(
+            "base: {}",
+            app.bases[i]
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("?")
+        ),
+    };
+    app.flash_msg(label);
+    reselect_into_order(app);
 }
 
 fn reselect_into_order(app: &mut App) {
@@ -1108,7 +1264,7 @@ fn save_settings(app: &App) {
     session::save_settings(
         &app.session_id,
         &session::Settings {
-            sort_ci_first: app.sort_ci_first,
+            sort_mode: app.sort_mode.as_str().to_string(),
             show_hidden: app.show_hidden,
             last_filter: app.filter_query.clone(),
         },
@@ -1359,7 +1515,7 @@ fn github_owner_repo(path: &Path) -> Option<String> {
     None
 }
 
-fn detect_prs(path: &Path) -> Option<usize> {
+fn detect_prs(path: &Path) -> Option<Vec<PrInfo>> {
     let owner_repo = github_owner_repo(path)?;
     let out = Command::new("gh")
         .args([
@@ -1372,9 +1528,9 @@ fn detect_prs(path: &Path) -> Option<usize> {
             "--state",
             "open",
             "--json",
-            "number",
+            "number,title,url,createdAt",
             "-q",
-            "length",
+            r#".[] | [(.number|tostring), .title, .url, .createdAt] | @tsv"#,
         ])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -1383,8 +1539,27 @@ fn detect_prs(path: &Path) -> Option<usize> {
     if !out.status.success() {
         return None;
     }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    s.parse().ok()
+    let s = String::from_utf8_lossy(&out.stdout);
+    let mut out = Vec::new();
+    for line in s.lines() {
+        let parts: Vec<&str> = line.splitn(4, '\t').collect();
+        if parts.len() < 4 {
+            continue;
+        }
+        let number: u64 = parts[0].parse().unwrap_or(0);
+        out.push(PrInfo {
+            number,
+            title: parts[1].to_string(),
+            url: parts[2].to_string(),
+            age: relative_age(parts[3]),
+        });
+    }
+    Some(out)
+}
+
+fn relative_age(iso: &str) -> String {
+    let date_part = iso.split('T').next().unwrap_or(iso);
+    date_part.to_string()
 }
 
 fn current_commit(path: &Path) -> Option<String> {
@@ -1544,6 +1719,33 @@ fn open_url(url: &str) {
     let _ = url;
 }
 
+fn action_copy_url(app: &mut App) {
+    let Some(repo) = app.repos.get(app.selected) else {
+        return;
+    };
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&repo.path)
+        .args(["remote", "get-url", "origin"])
+        .output();
+    let url = match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => {
+            app.flash_msg("no origin remote");
+            return;
+        }
+    };
+    let Some(http_url) = git_remote_to_https(&url) else {
+        app.flash_msg("could not parse remote URL");
+        return;
+    };
+    if copy_to_clipboard(&http_url) {
+        app.flash_msg(format!("copied {}", http_url));
+    } else {
+        app.flash_msg("clipboard unavailable");
+    }
+}
+
 fn action_copy_path(app: &mut App) {
     let Some(repo) = app.repos.get(app.selected) else {
         return;
@@ -1577,18 +1779,23 @@ fn execute_cmd(app: &mut App, cmd: Cmd, fetch_tx: &mpsc::Sender<FetchMsg>) -> Op
         Cmd::ToggleStash => {
             app.show_detail = true;
             app.show_readme = false;
+            app.show_prs = false;
             app.show_stash = !app.show_stash;
         }
+        Cmd::TogglePrs => {
+            app.show_detail = true;
+            app.show_readme = false;
+            app.show_stash = false;
+            app.show_prs = !app.show_prs;
+        }
         Cmd::ToggleSortCi => {
-            app.sort_ci_first = !app.sort_ci_first;
-            app.flash_msg(if app.sort_ci_first {
-                "sort: ci red first"
-            } else {
-                "sort: default"
-            });
+            app.sort_mode = app.sort_mode.next();
+            app.flash_msg(format!("sort: {}", app.sort_mode.label()));
             save_settings(app);
         }
+        Cmd::CycleBase => cycle_base_filter(app),
         Cmd::CopyPath => action_copy_path(app),
+        Cmd::CopyUrl => action_copy_url(app),
         Cmd::RefreshAll => {
             refresh_all(app);
             app.detail_cache_key = None;
