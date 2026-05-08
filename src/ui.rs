@@ -16,6 +16,7 @@ const SECTION_GAP_H: u16 = 1;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum SectionKind {
+    CiRed,
     Conflicts,
     Dirty,
     Clean,
@@ -25,6 +26,7 @@ enum SectionKind {
 impl SectionKind {
     fn label(self) -> &'static str {
         match self {
+            SectionKind::CiRed => "ci red",
             SectionKind::Conflicts => "conflicts",
             SectionKind::Dirty => "dirty",
             SectionKind::Clean => "clean",
@@ -34,6 +36,7 @@ impl SectionKind {
 
     fn color(self) -> ratatui::style::Color {
         match self {
+            SectionKind::CiRed => CONFLICT,
             SectionKind::Conflicts => CONFLICT,
             SectionKind::Dirty => AMBER,
             SectionKind::Clean => FOREST,
@@ -56,13 +59,23 @@ fn classify(app: &App, repo: &RepoStatus) -> SectionKind {
 }
 
 fn group_by_section(app: &App, order: &[usize]) -> Vec<(SectionKind, Vec<usize>)> {
+    let mut ci_red = Vec::new();
     let mut conflicts = Vec::new();
     let mut dirty = Vec::new();
     let mut clean = Vec::new();
     let mut hidden = Vec::new();
     for &i in order {
         let r = &app.repos[i];
-        match classify(app, r) {
+        let kind = classify(app, r);
+        if app.sort_ci_first
+            && kind != SectionKind::Hidden
+            && app.ci.get(&r.path).map(|c| c.state) == Some(CiState::Failure)
+        {
+            ci_red.push(i);
+            continue;
+        }
+        match kind {
+            SectionKind::CiRed => ci_red.push(i),
             SectionKind::Conflicts => conflicts.push(i),
             SectionKind::Dirty => dirty.push(i),
             SectionKind::Clean => clean.push(i),
@@ -70,6 +83,7 @@ fn group_by_section(app: &App, order: &[usize]) -> Vec<(SectionKind, Vec<usize>)
         }
     }
     [
+        (SectionKind::CiRed, ci_red),
         (SectionKind::Conflicts, conflicts),
         (SectionKind::Dirty, dirty),
         (SectionKind::Clean, clean),
@@ -247,7 +261,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled(app.base.display().to_string(), Style::default().fg(AMBER)),
+        Span::styled(crate::bases_label(&app.bases), Style::default().fg(AMBER)),
         Span::raw("  "),
         Span::styled(format!("{n} repos"), Style::default().fg(AMBER_STRONG)),
         Span::raw("  "),
@@ -443,6 +457,7 @@ fn render_grid(f: &mut Frame, area: Rect, app: &mut App) {
                 let hidden = app.hidden.contains(&repo.path);
                 let ci = app.ci.get(&repo.path).map(|c| c.state);
                 let is_fetching = app.fetching.contains(&repo.path);
+                let pr_count = app.prs.get(&repo.path).copied().unwrap_or(0);
                 render_tile(
                     f,
                     cells[c],
@@ -452,6 +467,7 @@ fn render_grid(f: &mut Frame, area: Rect, app: &mut App) {
                     hidden,
                     ci,
                     is_fetching,
+                    pr_count,
                 );
             }
             chunk_idx += 1;
@@ -468,6 +484,7 @@ fn render_tile(
     is_hidden: bool,
     ci: Option<CiState>,
     is_fetching: bool,
+    pr_count: usize,
 ) {
     let state_color = if repo.error.is_some() || repo.has_conflict() {
         CONFLICT
@@ -519,6 +536,14 @@ fn render_tile(
         title_spans.push(Span::styled(
             format!("{} ", sym),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if pr_count > 0 {
+        title_spans.push(Span::styled(
+            format!("PR{} ", pr_count),
+            Style::default()
+                .fg(AMBER_STRONG)
+                .add_modifier(Modifier::BOLD),
         ));
     }
     let title = Line::from(title_spans);
@@ -660,6 +685,10 @@ fn render_detail(f: &mut Frame, area: Rect, app: &App) {
         render_readme(f, inner, app);
         return;
     }
+    if app.show_stash {
+        render_stash(f, inner, app);
+        return;
+    }
 
     let mut status_lines = parse_status(&app.status_content);
     if let Some(info) = app.ci.get(&repo.path) {
@@ -695,6 +724,54 @@ fn render_detail(f: &mut Frame, area: Rect, app: &App) {
         parse_diff(&app.diff_content),
         app.diff_scroll,
     );
+}
+
+fn render_stash(f: &mut Frame, area: Rect, app: &App) {
+    let header = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(AMBER_STRONG))
+        .title(Line::from(vec![Span::styled(
+            " stash ",
+            Style::default()
+                .fg(AMBER_STRONG)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        )]));
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(0)])
+        .split(area);
+    f.render_widget(header, chunks[0]);
+
+    let content = app.stash_content.trim();
+    let lines: Vec<Line> = if content.is_empty() {
+        vec![Line::from(Span::styled(
+            "no stash entries",
+            Style::default().fg(STONE),
+        ))]
+    } else {
+        content
+            .lines()
+            .map(|l| {
+                let parts: Vec<&str> = l.splitn(3, '\x1f').collect();
+                if parts.len() == 3 {
+                    Line::from(vec![
+                        Span::styled(
+                            format!("{:<10}", parts[0]),
+                            Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(" "),
+                        Span::styled(format!("{:<14}", parts[1]), Style::default().fg(STONE)),
+                        Span::raw(" "),
+                        Span::styled(parts[2].to_string(), Style::default().fg(IVORY)),
+                    ])
+                } else {
+                    Line::raw(l.to_string())
+                }
+            })
+            .collect()
+    };
+    let para = Paragraph::new(lines).wrap(Wrap { trim: false });
+    f.render_widget(para, chunks[1]);
 }
 
 fn render_readme(f: &mut Frame, area: Rect, app: &App) {

@@ -19,6 +19,7 @@ Upgrade later with `brew upgrade den`.
 ```sh
 den                              # scan the current directory
 den ~/bearocratic                # scan a specific folder
+den ~/work ~/personal            # scan multiple folders
 den --depth 6 ~/bearocratic      # change recursion depth (default 4)
 den --fetch-interval 60 .        # fetch every 60s (0 disables)
 den --no-ci .                    # skip `gh` calls
@@ -39,8 +40,9 @@ persist to `~/.config/den/`.
 | `:` | Open command palette |
 | `p` / `x` | Pin / hide focused repo |
 | `e` / `o` / `s` / `g` / `A` | Open in editor / lazygit / shell / GitHub / GitHub Actions |
-| `r` / `F` | Refresh all / fetch focused now |
-| `i` | Toggle README overlay |
+| `r` / `F` / `P` | Refresh all / fetch focused / pull focused |
+| `i` / `S` | README overlay / stash overlay |
+| `O` | Toggle "CI red first" sort |
 | `q` | Quit |
 
 ## Optional integrations

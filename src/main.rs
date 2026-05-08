@@ -25,9 +25,9 @@ use crate::repo::{discover, status_for, RepoStatus};
 #[derive(Parser, Debug)]
 #[command(name = "den", version, about = "TUI watcher for dirty git repos")]
 struct Args {
-    /// Base folder to scan. Defaults to current directory.
+    /// Base folder(s) to scan. Defaults to current directory.
     #[arg(default_value = ".")]
-    path: PathBuf,
+    paths: Vec<PathBuf>,
 
     /// Maximum recursion depth when scanning for repos.
     #[arg(long, default_value_t = 4)]
@@ -48,6 +48,7 @@ pub enum FetchMsg {
     Started(PathBuf),
     Done(PathBuf),
     CiUpdate(PathBuf, Option<CiInfo>),
+    PrUpdate(PathBuf, Option<usize>),
     CycleFinished,
 }
 
@@ -92,7 +93,7 @@ pub struct App {
     pub repos: Vec<RepoStatus>,
     pub selected: usize,
     pub show_detail: bool,
-    pub base: PathBuf,
+    pub bases: Vec<PathBuf>,
     pub cols: usize,
     pub last_refresh: Instant,
     pub focus: DetailSection,
@@ -108,6 +109,8 @@ pub struct App {
     pub readme_scroll: u16,
     pub show_readme: bool,
     pub readme_rendered: bool,
+    pub show_stash: bool,
+    pub stash_content: String,
     pub pinned: HashSet<PathBuf>,
     pub hidden: HashSet<PathBuf>,
     pub show_hidden: bool,
@@ -123,6 +126,8 @@ pub struct App {
     pub is_fetching: bool,
     pub fetching: HashSet<PathBuf>,
     pub ci: std::collections::HashMap<PathBuf, CiInfo>,
+    pub prs: std::collections::HashMap<PathBuf, usize>,
+    pub sort_ci_first: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,9 +140,12 @@ pub enum Cmd {
     OpenShell,
     OpenGitHub,
     OpenActions,
+    ToggleStash,
+    ToggleSortCi,
     CopyPath,
     RefreshAll,
     FetchFocused,
+    PullFocused,
     ToggleReadme,
     ToggleMarkdownMode,
     ToggleDetail,
@@ -204,6 +212,18 @@ pub fn all_commands() -> &'static [CmdInfo] {
             desc: "open the GitHub Actions tab in browser",
         },
         CmdInfo {
+            cmd: Cmd::ToggleStash,
+            name: "stash list",
+            keys: "S",
+            desc: "show stash entries for the focused repo",
+        },
+        CmdInfo {
+            cmd: Cmd::ToggleSortCi,
+            name: "sort: ci red first",
+            keys: "O",
+            desc: "toggle a leading section that surfaces CI failures",
+        },
+        CmdInfo {
             cmd: Cmd::CopyPath,
             name: "copy path",
             keys: "y",
@@ -220,6 +240,12 @@ pub fn all_commands() -> &'static [CmdInfo] {
             name: "fetch focused",
             keys: "F",
             desc: "git fetch the focused repo right now",
+        },
+        CmdInfo {
+            cmd: Cmd::PullFocused,
+            name: "pull focused",
+            keys: "P",
+            desc: "git pull --ff-only on the focused repo",
         },
         CmdInfo {
             cmd: Cmd::ToggleDetail,
@@ -341,14 +367,24 @@ fn state_priority(r: &RepoStatus) -> u8 {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let base = args.path.canonicalize()?;
+    let mut bases: Vec<PathBuf> = Vec::with_capacity(args.paths.len());
+    for p in &args.paths {
+        bases.push(p.canonicalize()?);
+    }
 
     step_start(&format!(
         "scanning {} (depth {})…",
-        base.display(),
+        bases_label(&bases),
         args.depth
     ));
-    let repo_paths = discover(&base, args.depth);
+    let mut repo_paths: Vec<PathBuf> = Vec::new();
+    for b in &bases {
+        for r in discover(b, args.depth) {
+            if !repo_paths.contains(&r) {
+                repo_paths.push(r);
+            }
+        }
+    }
     if repo_paths.is_empty() {
         step_fail(&format!("no git repos found within depth {}", args.depth));
         return Ok(());
@@ -356,7 +392,7 @@ fn main() -> Result<()> {
     step_done(&format!(
         "found {} repos in {}",
         repo_paths.len(),
-        base.display()
+        bases_label(&bases)
     ));
 
     let total = repo_paths.len();
@@ -405,6 +441,8 @@ fn main() -> Result<()> {
             for p in &paths {
                 let ci = detect_ci(p);
                 let _ = tx.send(FetchMsg::CiUpdate(p.clone(), ci));
+                let prs = detect_prs(p);
+                let _ = tx.send(FetchMsg::PrUpdate(p.clone(), prs));
             }
         });
     }
@@ -433,6 +471,8 @@ fn main() -> Result<()> {
                     if ci_enabled {
                         let ci = detect_ci(p);
                         let _ = tx.send(FetchMsg::CiUpdate(p.clone(), ci));
+                        let prs = detect_prs(p);
+                        let _ = tx.send(FetchMsg::PrUpdate(p.clone(), prs));
                     }
                 }
                 let _ = tx.send(FetchMsg::CycleFinished);
@@ -451,7 +491,7 @@ fn main() -> Result<()> {
         repos: statuses,
         selected: 0,
         show_detail: true,
-        base: base.clone(),
+        bases: bases.clone(),
         cols: 1,
         last_refresh: Instant::now(),
         focus: DetailSection::Status,
@@ -467,6 +507,8 @@ fn main() -> Result<()> {
         readme_scroll: 0,
         show_readme: false,
         readme_rendered: true,
+        show_stash: false,
+        stash_content: String::new(),
         pinned,
         hidden,
         show_hidden: false,
@@ -482,6 +524,8 @@ fn main() -> Result<()> {
         is_fetching: false,
         fetching: HashSet::new(),
         ci: std::collections::HashMap::new(),
+        prs: std::collections::HashMap::new(),
+        sort_ci_first: false,
     };
 
     let res = run(&mut terminal, &mut app, &rx, &fetch_rx, fetch_tx.clone());
@@ -596,6 +640,7 @@ where
                         app.detail_cache_key = None;
                     }
                     KeyCode::Char('F') => fetch_focused(app, &fetch_tx),
+                    KeyCode::Char('P') => pull_focused(app, &fetch_tx),
                     KeyCode::Left | KeyCode::Char('h') => move_sel(app, -1, 0),
                     KeyCode::Right | KeyCode::Char('l') => move_sel(app, 1, 0),
                     KeyCode::Up | KeyCode::Char('k') => move_sel(app, 0, -1),
@@ -622,7 +667,13 @@ where
                     }
                     KeyCode::Char('i') => {
                         app.show_detail = true;
+                        app.show_stash = false;
                         app.show_readme = !app.show_readme;
+                    }
+                    KeyCode::Char('S') => {
+                        app.show_detail = true;
+                        app.show_readme = false;
+                        app.show_stash = !app.show_stash;
                     }
                     KeyCode::Char('m') => {
                         if app.show_readme {
@@ -653,6 +704,14 @@ where
                     KeyCode::Char('s') => action_shell(app),
                     KeyCode::Char('g') => action_github(app),
                     KeyCode::Char('A') => action_actions(app),
+                    KeyCode::Char('O') => {
+                        app.sort_ci_first = !app.sort_ci_first;
+                        app.flash_msg(if app.sort_ci_first {
+                            "sort: ci red first"
+                        } else {
+                            "sort: default"
+                        });
+                    }
                     KeyCode::Char('y') => action_copy_path(app),
                     _ => {}
                 }
@@ -674,7 +733,7 @@ where
         let selected_path = app.repos.get(app.selected).map(|r| r.path.clone());
         for p in &changed {
             if let Some(idx) = app.repos.iter().position(|r| &r.path == p) {
-                app.repos[idx] = status_for(p);
+                refresh_one_with_flash(app, idx, p);
             }
         }
         if let Some(sel) = &selected_path {
@@ -695,7 +754,7 @@ where
                 FetchMsg::Done(p) => {
                     app.fetching.remove(&p);
                     if let Some(idx) = app.repos.iter().position(|r| r.path == p) {
-                        app.repos[idx] = status_for(&p);
+                        refresh_one_with_flash(app, idx, &p);
                     }
                     if selected_path_for_fetch.as_ref() == Some(&p) {
                         app.detail_cache_key = None;
@@ -712,6 +771,14 @@ where
                         }
                     }
                 }
+                FetchMsg::PrUpdate(p, count) => match count {
+                    Some(n) if n > 0 => {
+                        app.prs.insert(p, n);
+                    }
+                    _ => {
+                        app.prs.remove(&p);
+                    }
+                },
                 FetchMsg::CycleFinished => {
                     app.last_auto_fetch = Some(Instant::now());
                     app.is_fetching = false;
@@ -769,6 +836,25 @@ fn refresh_all(app: &mut App) {
     app.last_refresh = Instant::now();
 }
 
+fn refresh_one_with_flash(app: &mut App, idx: usize, path: &Path) {
+    let old_clean = app.repos[idx].is_clean();
+    let old_conflict = app.repos[idx].has_conflict();
+    let new_status = status_for(path);
+    let new_clean = new_status.is_clean();
+    let new_conflict = new_status.has_conflict();
+    let name = new_status.name.clone();
+    app.repos[idx] = new_status;
+    if old_conflict != new_conflict && new_conflict {
+        app.flash_msg(format!("{} has conflicts", name));
+    } else if old_clean != new_clean {
+        if new_clean {
+            app.flash_msg(format!("{} is clean", name));
+        } else {
+            app.flash_msg(format!("{} went dirty", name));
+        }
+    }
+}
+
 fn reselect_into_order(app: &mut App) {
     let order = display_order(app);
     if order.is_empty() {
@@ -820,6 +906,7 @@ fn ensure_detail(app: &mut App) {
     let path = repo.path.clone();
     app.status_content = fetch_status(&path);
     app.diff_content = fetch_diff(&path);
+    app.stash_content = fetch_stash(&path);
     let (tag, time_unix) = fetch_release(&path);
     app.release_tag = tag;
     app.release_time_unix = time_unix;
@@ -846,6 +933,17 @@ fn run_git(path: &Path, args: &[&str]) -> String {
 
 fn fetch_status(path: &Path) -> String {
     run_git(path, &["status", "--porcelain=v1", "-b"])
+}
+
+fn fetch_stash(path: &Path) -> String {
+    run_git(
+        path,
+        &[
+            "stash",
+            "list",
+            "--pretty=format:%gd\x1f%cr\x1f%s",
+        ],
+    )
 }
 
 fn fetch_diff(path: &Path) -> String {
@@ -1000,6 +1098,14 @@ fn action_lazygit(app: &mut App) {
 fn action_shell(app: &mut App) {
     if let Some(repo) = app.repos.get(app.selected) {
         app.pending_shell = Some(repo.path.clone());
+    }
+}
+
+fn bases_label(bases: &[PathBuf]) -> String {
+    match bases.len() {
+        0 => String::from("."),
+        1 => bases[0].display().to_string(),
+        _ => format!("{} +{} more", bases[0].display(), bases.len() - 1),
     }
 }
 
@@ -1158,6 +1264,34 @@ fn github_owner_repo(path: &Path) -> Option<String> {
     None
 }
 
+fn detect_prs(path: &Path) -> Option<usize> {
+    let owner_repo = github_owner_repo(path)?;
+    let out = Command::new("gh")
+        .args([
+            "pr",
+            "list",
+            "--repo",
+            &owner_repo,
+            "--author",
+            "@me",
+            "--state",
+            "open",
+            "--json",
+            "number",
+            "-q",
+            "length",
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    s.parse().ok()
+}
+
 fn current_commit(path: &Path) -> Option<String> {
     let out = Command::new("git")
         .arg("-C")
@@ -1174,6 +1308,33 @@ fn current_commit(path: &Path) -> Option<String> {
     } else {
         Some(s)
     }
+}
+
+fn pull_focused(app: &mut App, fetch_tx: &mpsc::Sender<FetchMsg>) {
+    let Some(repo) = app.repos.get(app.selected) else {
+        return;
+    };
+    let path = repo.path.clone();
+    let name = repo.name.clone();
+    let tx = fetch_tx.clone();
+    let _ = fetch_tx.send(FetchMsg::Started(path.clone()));
+    std::thread::spawn(move || {
+        let _ = Command::new("git")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .arg("-C")
+            .arg(&path)
+            .args(["pull", "--ff-only", "--quiet"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let _ = tx.send(FetchMsg::Done(path.clone()));
+        let ci = detect_ci(&path);
+        let _ = tx.send(FetchMsg::CiUpdate(path.clone(), ci));
+        let prs = detect_prs(&path);
+        let _ = tx.send(FetchMsg::PrUpdate(path, prs));
+    });
+    app.flash_msg(format!("pulling {}…", name));
 }
 
 fn fetch_focused(app: &mut App, fetch_tx: &mpsc::Sender<FetchMsg>) {
@@ -1196,7 +1357,9 @@ fn fetch_focused(app: &mut App, fetch_tx: &mpsc::Sender<FetchMsg>) {
             .status();
         let _ = tx.send(FetchMsg::Done(path.clone()));
         let ci = detect_ci(&path);
-        let _ = tx.send(FetchMsg::CiUpdate(path, ci));
+        let _ = tx.send(FetchMsg::CiUpdate(path.clone(), ci));
+        let prs = detect_prs(&path);
+        let _ = tx.send(FetchMsg::PrUpdate(path, prs));
     });
     app.flash_msg(format!("fetching {}…", name));
 }
@@ -1315,6 +1478,19 @@ fn execute_cmd(app: &mut App, cmd: Cmd, fetch_tx: &mpsc::Sender<FetchMsg>) -> Op
         Cmd::OpenShell => action_shell(app),
         Cmd::OpenGitHub => action_github(app),
         Cmd::OpenActions => action_actions(app),
+        Cmd::ToggleStash => {
+            app.show_detail = true;
+            app.show_readme = false;
+            app.show_stash = !app.show_stash;
+        }
+        Cmd::ToggleSortCi => {
+            app.sort_ci_first = !app.sort_ci_first;
+            app.flash_msg(if app.sort_ci_first {
+                "sort: ci red first"
+            } else {
+                "sort: default"
+            });
+        }
         Cmd::CopyPath => action_copy_path(app),
         Cmd::RefreshAll => {
             refresh_all(app);
@@ -1322,6 +1498,7 @@ fn execute_cmd(app: &mut App, cmd: Cmd, fetch_tx: &mpsc::Sender<FetchMsg>) -> Op
             app.flash_msg("refreshed");
         }
         Cmd::FetchFocused => fetch_focused(app, fetch_tx),
+        Cmd::PullFocused => pull_focused(app, fetch_tx),
         Cmd::ToggleDetail => {
             app.show_detail = !app.show_detail;
         }
