@@ -1,10 +1,11 @@
 mod brand;
 mod markdown;
 mod repo;
+mod session;
 mod ui;
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -25,6 +26,9 @@ use crate::repo::{discover, status_for, RepoStatus};
 #[derive(Parser, Debug)]
 #[command(name = "den", version, about = "TUI watcher for dirty git repos")]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Subcmd>,
+
     /// Base folder(s) to scan. Defaults to current directory.
     #[arg(default_value = ".")]
     paths: Vec<PathBuf>,
@@ -40,6 +44,17 @@ struct Args {
     /// Disable CI status badge (skips `gh run list` calls).
     #[arg(long, default_value_t = false)]
     no_ci: bool,
+}
+
+#[derive(Subcommand, Debug)]
+enum Subcmd {
+    /// List saved sessions under ~/.den/sessions
+    Ls,
+    /// Forget a saved session by id
+    Forget {
+        /// Session id (from `den ls`)
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +143,7 @@ pub struct App {
     pub ci: std::collections::HashMap<PathBuf, CiInfo>,
     pub prs: std::collections::HashMap<PathBuf, usize>,
     pub sort_ci_first: bool,
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -367,6 +383,37 @@ fn state_priority(r: &RepoStatus) -> u8 {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    match &args.command {
+        Some(Subcmd::Ls) => {
+            let sessions = session::list_sessions();
+            if sessions.is_empty() {
+                println!("no sessions yet");
+                return Ok(());
+            }
+            for (id, bases, pin_count) in sessions {
+                let bases_str = bases
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("{}  {}  ({} pins)", id, bases_str, pin_count);
+            }
+            return Ok(());
+        }
+        Some(Subcmd::Forget { id }) => {
+            let dir = session::session_dir(id);
+            if !dir.exists() {
+                eprintln!("no session with id {}", id);
+                return Ok(());
+            }
+            std::fs::remove_dir_all(&dir)?;
+            println!("forgot {}", id);
+            return Ok(());
+        }
+        None => {}
+    }
+
     let mut bases: Vec<PathBuf> = Vec::with_capacity(args.paths.len());
     for p in &args.paths {
         bases.push(p.canonicalize()?);
@@ -418,8 +465,20 @@ fn main() -> Result<()> {
         );
     }
 
-    let pinned = load_pin_set("pins.txt");
-    let hidden = load_pin_set("hidden.txt");
+    let session_id = session::session_id(&bases);
+    let session_dir = session::session_dir(&session_id);
+    let migrated = session::migrate_legacy(&session_id);
+    if migrated {
+        step_done("migrated legacy ~/.config/den/ to ~/.den/");
+    }
+    let pinned = session::load_path_set(&session_dir.join("pins.txt"));
+    let hidden = session::load_path_set(&session::den_dir().join("hidden.txt"));
+    let settings = session::load_settings(&session_dir.join("settings.kv"));
+    let bases_strings: Vec<String> = bases
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+    session::save_lines(&session_dir.join("bases.txt"), &bases_strings);
 
     let (tx, rx) = mpsc::channel::<DebounceEventResult>();
     let mut debouncer = new_debouncer(Duration::from_millis(400), move |res| {
@@ -481,6 +540,7 @@ fn main() -> Result<()> {
         });
     }
 
+    install_terminal_panic_hook();
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -511,7 +571,7 @@ fn main() -> Result<()> {
         stash_content: String::new(),
         pinned,
         hidden,
-        show_hidden: false,
+        show_hidden: settings.show_hidden,
         palette_open: false,
         palette_query: String::new(),
         palette_selected: 0,
@@ -525,8 +585,12 @@ fn main() -> Result<()> {
         fetching: HashSet::new(),
         ci: std::collections::HashMap::new(),
         prs: std::collections::HashMap::new(),
-        sort_ci_first: false,
+        sort_ci_first: settings.sort_ci_first,
+        session_id: session_id.clone(),
     };
+    if !settings.last_filter.is_empty() {
+        app.filter_query = settings.last_filter;
+    }
 
     let res = run(&mut terminal, &mut app, &rx, &fetch_rx, fetch_tx.clone());
 
@@ -564,10 +628,12 @@ where
                             app.filter_open = false;
                             app.filter_query.clear();
                             reselect_into_order(app);
+                            save_settings(app);
                         }
                         KeyCode::Enter => {
                             app.filter_open = false;
                             reselect_into_order(app);
+                            save_settings(app);
                         }
                         KeyCode::Backspace => {
                             app.filter_query.pop();
@@ -689,6 +755,7 @@ where
                         } else {
                             "hiding muted repos"
                         });
+                        save_settings(app);
                     }
                     KeyCode::PageDown => {
                         let s = app.focused_scroll_mut();
@@ -711,6 +778,7 @@ where
                         } else {
                             "sort: default"
                         });
+                        save_settings(app);
                     }
                     KeyCode::Char('y') => action_copy_path(app),
                     _ => {}
@@ -1003,30 +1071,26 @@ fn fetch_release(path: &Path) -> (String, u64) {
     (name, time_unix)
 }
 
-fn config_path(name: &str) -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".config/den").join(name)
+fn save_pins(app: &App) {
+    let p = session::session_dir(&app.session_id).join("pins.txt");
+    session::save_path_set(&p, &app.pinned);
 }
 
-fn load_pin_set(name: &str) -> HashSet<PathBuf> {
-    let p = config_path(name);
-    let content = std::fs::read_to_string(&p).unwrap_or_default();
-    content
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .map(PathBuf::from)
-        .collect()
+fn save_hidden(app: &App) {
+    let p = session::den_dir().join("hidden.txt");
+    session::save_path_set(&p, &app.hidden);
 }
 
-fn save_pin_set(name: &str, set: &HashSet<PathBuf>) {
-    let p = config_path(name);
-    if let Some(parent) = p.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut entries: Vec<String> = set.iter().filter_map(|p| p.to_str().map(String::from)).collect();
-    entries.sort();
-    let _ = std::fs::write(&p, entries.join("\n"));
+fn save_settings(app: &App) {
+    let p = session::session_dir(&app.session_id).join("settings.kv");
+    session::save_settings(
+        &p,
+        &session::Settings {
+            sort_ci_first: app.sort_ci_first,
+            show_hidden: app.show_hidden,
+            last_filter: app.filter_query.clone(),
+        },
+    );
 }
 
 fn toggle_pin(app: &mut App) {
@@ -1042,7 +1106,7 @@ fn toggle_pin(app: &mut App) {
         app.pinned.insert(path);
         app.flash_msg(format!("pinned {}", name));
     }
-    save_pin_set("pins.txt", &app.pinned);
+    save_pins(app);
 }
 
 fn toggle_hidden(app: &mut App) {
@@ -1067,7 +1131,7 @@ fn toggle_hidden(app: &mut App) {
             }
         }
     }
-    save_pin_set("hidden.txt", &app.hidden);
+    save_hidden(app);
 }
 
 fn action_editor(app: &mut App) {
@@ -1099,6 +1163,15 @@ fn action_shell(app: &mut App) {
     if let Some(repo) = app.repos.get(app.selected) {
         app.pending_shell = Some(repo.path.clone());
     }
+}
+
+fn install_terminal_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        prev(info);
+    }));
 }
 
 fn bases_label(bases: &[PathBuf]) -> String {
@@ -1472,6 +1545,7 @@ fn execute_cmd(app: &mut App, cmd: Cmd, fetch_tx: &mpsc::Sender<FetchMsg>) -> Op
             } else {
                 "hiding muted repos"
             });
+            save_settings(app);
         }
         Cmd::OpenEditor => action_editor(app),
         Cmd::OpenLazyGit => action_lazygit(app),
@@ -1490,6 +1564,7 @@ fn execute_cmd(app: &mut App, cmd: Cmd, fetch_tx: &mpsc::Sender<FetchMsg>) -> Op
             } else {
                 "sort: default"
             });
+            save_settings(app);
         }
         Cmd::CopyPath => action_copy_path(app),
         Cmd::RefreshAll => {

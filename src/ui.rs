@@ -17,6 +17,7 @@ const SECTION_GAP_H: u16 = 1;
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum SectionKind {
     CiRed,
+    Pinned,
     Conflicts,
     Dirty,
     Clean,
@@ -27,6 +28,7 @@ impl SectionKind {
     fn label(self) -> &'static str {
         match self {
             SectionKind::CiRed => "ci red",
+            SectionKind::Pinned => "pinned",
             SectionKind::Conflicts => "conflicts",
             SectionKind::Dirty => "dirty",
             SectionKind::Clean => "clean",
@@ -37,6 +39,7 @@ impl SectionKind {
     fn color(self) -> ratatui::style::Color {
         match self {
             SectionKind::CiRed => CONFLICT,
+            SectionKind::Pinned => AMBER_STRONG,
             SectionKind::Conflicts => CONFLICT,
             SectionKind::Dirty => AMBER,
             SectionKind::Clean => FOREST,
@@ -49,6 +52,9 @@ fn classify(app: &App, repo: &RepoStatus) -> SectionKind {
     if app.hidden.contains(&repo.path) {
         return SectionKind::Hidden;
     }
+    if app.pinned.contains(&repo.path) {
+        return SectionKind::Pinned;
+    }
     if repo.has_conflict() || repo.error.is_some() {
         return SectionKind::Conflicts;
     }
@@ -60,6 +66,7 @@ fn classify(app: &App, repo: &RepoStatus) -> SectionKind {
 
 fn group_by_section(app: &App, order: &[usize]) -> Vec<(SectionKind, Vec<usize>)> {
     let mut ci_red = Vec::new();
+    let mut pinned = Vec::new();
     let mut conflicts = Vec::new();
     let mut dirty = Vec::new();
     let mut clean = Vec::new();
@@ -76,6 +83,7 @@ fn group_by_section(app: &App, order: &[usize]) -> Vec<(SectionKind, Vec<usize>)
         }
         match kind {
             SectionKind::CiRed => ci_red.push(i),
+            SectionKind::Pinned => pinned.push(i),
             SectionKind::Conflicts => conflicts.push(i),
             SectionKind::Dirty => dirty.push(i),
             SectionKind::Clean => clean.push(i),
@@ -84,6 +92,7 @@ fn group_by_section(app: &App, order: &[usize]) -> Vec<(SectionKind, Vec<usize>)
     }
     [
         (SectionKind::CiRed, ci_red),
+        (SectionKind::Pinned, pinned),
         (SectionKind::Conflicts, conflicts),
         (SectionKind::Dirty, dirty),
         (SectionKind::Clean, clean),
@@ -991,7 +1000,9 @@ fn ci_status_line(info: &CiInfo) -> Line<'static> {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             info.url.clone(),
-            Style::default().fg(STONE_STRONG),
+            Style::default()
+                .fg(STONE)
+                .add_modifier(Modifier::UNDERLINED),
         ));
     }
     Line::from(spans)

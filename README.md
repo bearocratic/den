@@ -23,11 +23,27 @@ den ~/work ~/personal            # scan multiple folders
 den --depth 6 ~/bearocratic      # change recursion depth (default 4)
 den --fetch-interval 60 .        # fetch every 60s (0 disables)
 den --no-ci .                    # skip `gh` calls
+den ls                           # list saved sessions
+den forget <id>                  # delete a saved session
+den help                         # full help, or `den help <command>`
 ```
 
 Press `:` to open the command palette. Every shortcut, with a description,
-in one place. Pins (`p`), hides (`x`) and the show-hidden toggle (`.`)
-persist to `~/.config/den/`.
+in one place.
+
+## Persistence
+
+State lives under `~/.den/`:
+
+- `~/.den/hidden.txt` — global hidden list (a vendor mirror you mute
+  stays muted everywhere).
+- `~/.den/sessions/<id>/` — one folder per unique combination of base
+  directories you opened with. Holds `pins.txt`, `bases.txt`, and
+  `settings.kv` (sort mode, show-hidden, last filter). Run `den ls` to
+  list, `den forget <id>` to delete one.
+
+Existing `~/.config/den/{pins,hidden}.txt` from earlier versions is
+migrated into the new layout on first launch.
 
 ## Keys
 
