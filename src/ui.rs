@@ -1,6 +1,6 @@
 use crate::brand::{AMBER, AMBER_STRONG, CONFLICT, FOREST, IVORY, STONE, STONE_STRONG};
 use crate::repo::RepoStatus;
-use crate::{App, DetailSection};
+use crate::{App, CiInfo, CiState, DetailSection};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -274,7 +274,27 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(if hidden > 0 { AMBER } else { STONE_STRONG }),
         ),
     ]);
-    let sync_line = Line::from(vec![sync_span(app)]);
+    let mut second: Vec<Span<'static>> = vec![sync_span(app)];
+    if app.filter_open || !app.filter_query.is_empty() {
+        second.push(Span::raw("   "));
+        second.push(Span::styled(
+            "/ ",
+            Style::default().fg(AMBER_STRONG).add_modifier(Modifier::BOLD),
+        ));
+        second.push(Span::styled(
+            app.filter_query.clone(),
+            Style::default().fg(IVORY),
+        ));
+        if app.filter_open {
+            second.push(Span::styled(
+                "▌",
+                Style::default()
+                    .fg(AMBER_STRONG)
+                    .add_modifier(Modifier::SLOW_BLINK),
+            ));
+        }
+    }
+    let sync_line = Line::from(second);
     f.render_widget(Paragraph::new(vec![line, sync_line]), area);
 }
 
@@ -317,6 +337,8 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let mut spans = vec![
         key(":"),
         label("commands"),
+        key("/"),
+        label("filter"),
         key("↑↓←→"),
         label("select"),
         key("↵"),
@@ -419,6 +441,8 @@ fn render_grid(f: &mut Frame, area: Rect, app: &mut App) {
                 let repo = &app.repos[repo_idx];
                 let pinned = app.pinned.contains(&repo.path);
                 let hidden = app.hidden.contains(&repo.path);
+                let ci = app.ci.get(&repo.path).map(|c| c.state);
+                let is_fetching = app.fetching.contains(&repo.path);
                 render_tile(
                     f,
                     cells[c],
@@ -426,6 +450,8 @@ fn render_grid(f: &mut Frame, area: Rect, app: &mut App) {
                     repo_idx == app.selected,
                     pinned,
                     hidden,
+                    ci,
+                    is_fetching,
                 );
             }
             chunk_idx += 1;
@@ -440,6 +466,8 @@ fn render_tile(
     selected: bool,
     pinned: bool,
     is_hidden: bool,
+    ci: Option<CiState>,
+    is_fetching: bool,
 ) {
     let state_color = if repo.error.is_some() || repo.has_conflict() {
         CONFLICT
@@ -479,6 +507,20 @@ fn render_tile(
         format!("{} ", repo.name),
         Style::default().fg(name_color).add_modifier(Modifier::BOLD),
     ));
+    if is_fetching {
+        title_spans.push(Span::styled(
+            format!("{} ", spinner_glyph()),
+            Style::default()
+                .fg(AMBER_STRONG)
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else if let Some(c) = ci {
+        let (sym, color) = ci_glyph(c);
+        title_spans.push(Span::styled(
+            format!("{} ", sym),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+    }
     let title = Line::from(title_spans);
 
     let block = Block::default()
@@ -619,8 +661,18 @@ fn render_detail(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let status_lines = parse_status(&app.status_content);
-    let status_h = (status_lines.len() as u16 + 2).clamp(3, 10);
+    let mut status_lines = parse_status(&app.status_content);
+    if let Some(info) = app.ci.get(&repo.path) {
+        if matches!(info.state, CiState::Failure | CiState::Running) {
+            status_lines.insert(0, ci_status_line(info));
+            if status_lines.get(1).map(|l| l.spans.is_empty()).unwrap_or(false) {
+                // already a blank separator
+            } else {
+                status_lines.insert(1, Line::raw(""));
+            }
+        }
+    }
+    let status_h = (status_lines.len() as u16 + 2).clamp(3, 12);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -833,6 +885,58 @@ fn parse_diff(s: &str) -> Vec<Line<'_>> {
         out.push(Line::from(Span::styled(l.to_string(), style)));
     }
     out
+}
+
+fn ci_status_line(info: &CiInfo) -> Line<'static> {
+    let (label, color) = match info.state {
+        CiState::Failure => ("CI failed", CONFLICT),
+        CiState::Running => ("CI running", AMBER),
+        _ => ("CI", STONE),
+    };
+    let mut spans: Vec<Span<'static>> = vec![
+        Span::styled(
+            "● ",
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{}: ", label),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(info.name.clone(), Style::default().fg(IVORY)),
+    ];
+    if let Some(step) = &info.failed_step {
+        spans.push(Span::styled(
+            format!("  · {}", step),
+            Style::default().fg(STONE),
+        ));
+    }
+    if !info.url.is_empty() {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            info.url.clone(),
+            Style::default().fg(STONE_STRONG),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn spinner_glyph() -> &'static str {
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let ms = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let i = ((ms / 100) as usize) % FRAMES.len();
+    FRAMES[i]
+}
+
+fn ci_glyph(state: CiState) -> (&'static str, ratatui::style::Color) {
+    match state {
+        CiState::Success => ("●", FOREST),
+        CiState::Failure => ("●", CONFLICT),
+        CiState::Running => ("◐", AMBER),
+        CiState::Unknown => ("○", STONE_STRONG),
+    }
 }
 
 fn relative_time(t: SystemTime) -> String {

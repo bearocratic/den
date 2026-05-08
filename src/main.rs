@@ -36,13 +36,35 @@ struct Args {
     /// Seconds between background `git fetch` cycles. Set to 0 to disable.
     #[arg(long, default_value_t = 300)]
     fetch_interval: u64,
+
+    /// Disable CI status badge (skips `gh run list` calls).
+    #[arg(long, default_value_t = false)]
+    no_ci: bool,
 }
 
 #[derive(Debug, Clone)]
 pub enum FetchMsg {
     CycleStarted,
+    Started(PathBuf),
     Done(PathBuf),
+    CiUpdate(PathBuf, Option<CiInfo>),
     CycleFinished,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CiState {
+    Success,
+    Failure,
+    Running,
+    Unknown,
+}
+
+#[derive(Debug, Clone)]
+pub struct CiInfo {
+    pub state: CiState,
+    pub name: String,
+    pub url: String,
+    pub failed_step: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,11 +114,15 @@ pub struct App {
     pub palette_open: bool,
     pub palette_query: String,
     pub palette_selected: usize,
+    pub filter_open: bool,
+    pub filter_query: String,
     pub pending_lazygit: Option<PathBuf>,
     pub pending_shell: Option<PathBuf>,
     pub flash: Option<(String, Instant)>,
     pub last_auto_fetch: Option<Instant>,
     pub is_fetching: bool,
+    pub fetching: HashSet<PathBuf>,
+    pub ci: std::collections::HashMap<PathBuf, CiInfo>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,8 +134,10 @@ pub enum Cmd {
     OpenLazyGit,
     OpenShell,
     OpenGitHub,
+    OpenActions,
     CopyPath,
     RefreshAll,
+    FetchFocused,
     ToggleReadme,
     ToggleMarkdownMode,
     ToggleDetail,
@@ -170,6 +198,12 @@ pub fn all_commands() -> &'static [CmdInfo] {
             desc: "open the repo's origin URL in browser",
         },
         CmdInfo {
+            cmd: Cmd::OpenActions,
+            name: "open actions",
+            keys: "A",
+            desc: "open the GitHub Actions tab in browser",
+        },
+        CmdInfo {
             cmd: Cmd::CopyPath,
             name: "copy path",
             keys: "y",
@@ -180,6 +214,12 @@ pub fn all_commands() -> &'static [CmdInfo] {
             name: "refresh all",
             keys: "r",
             desc: "re-scan every repo's status",
+        },
+        CmdInfo {
+            cmd: Cmd::FetchFocused,
+            name: "fetch focused",
+            keys: "F",
+            desc: "git fetch the focused repo right now",
         },
         CmdInfo {
             cmd: Cmd::ToggleDetail,
@@ -251,10 +291,17 @@ impl App {
 }
 
 pub fn display_order(app: &App) -> Vec<usize> {
+    let q = app.filter_query.trim().to_lowercase();
     let mut idx: Vec<usize> = (0..app.repos.len())
         .filter(|i| {
             let r = &app.repos[*i];
-            app.show_hidden || !app.hidden.contains(&r.path)
+            if !app.show_hidden && app.hidden.contains(&r.path) {
+                return false;
+            }
+            if !q.is_empty() && !r.name.to_lowercase().contains(&q) {
+                return false;
+            }
+            true
         })
         .collect();
     idx.sort_by(|&a, &b| {
@@ -296,16 +343,44 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let base = args.path.canonicalize()?;
 
-    eprintln!("scanning {} (depth {})…", base.display(), args.depth);
+    step_start(&format!(
+        "scanning {} (depth {})…",
+        base.display(),
+        args.depth
+    ));
     let repo_paths = discover(&base, args.depth);
     if repo_paths.is_empty() {
-        eprintln!("no git repos found within depth {}", args.depth);
+        step_fail(&format!("no git repos found within depth {}", args.depth));
         return Ok(());
     }
-    eprintln!("found {} repos", repo_paths.len());
+    step_done(&format!(
+        "found {} repos in {}",
+        repo_paths.len(),
+        base.display()
+    ));
 
-    let mut statuses: Vec<RepoStatus> = repo_paths.iter().map(|p| status_for(p)).collect();
+    let total = repo_paths.len();
+    let mut statuses: Vec<RepoStatus> = Vec::with_capacity(total);
+    for (i, p) in repo_paths.iter().enumerate() {
+        let name = p
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?");
+        step_progress(i, total, name);
+        statuses.push(status_for(p));
+    }
     statuses.sort_by(|a, b| a.name.cmp(&b.name));
+    step_done(&format!("read status for {} repos", total));
+
+    if args.no_ci {
+        step_warn("CI badges disabled (--no-ci)");
+    } else if gh_authed() {
+        step_done("gh authenticated");
+    } else {
+        step_warn(
+            "gh: not authenticated — CI badges disabled. Run `gh auth login` or pass --no-ci",
+        );
+    }
 
     let pinned = load_pin_set("pins.txt");
     let hidden = load_pin_set("hidden.txt");
@@ -319,15 +394,32 @@ fn main() -> Result<()> {
     }
 
     let (fetch_tx, fetch_rx) = mpsc::channel::<FetchMsg>();
+
+    if !args.no_ci {
+        let paths = repo_paths.clone();
+        let tx = fetch_tx.clone();
+        std::thread::spawn(move || {
+            for p in &paths {
+                let _ = tx.send(FetchMsg::Started(p.clone()));
+            }
+            for p in &paths {
+                let ci = detect_ci(p);
+                let _ = tx.send(FetchMsg::CiUpdate(p.clone(), ci));
+            }
+        });
+    }
+
     if args.fetch_interval > 0 {
         let interval = Duration::from_secs(args.fetch_interval);
         let paths = repo_paths.clone();
         let tx = fetch_tx.clone();
+        let ci_enabled = !args.no_ci;
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(15));
             loop {
                 let _ = tx.send(FetchMsg::CycleStarted);
                 for p in &paths {
+                    let _ = tx.send(FetchMsg::Started(p.clone()));
                     let _ = Command::new("git")
                         .env("GIT_TERMINAL_PROMPT", "0")
                         .arg("-C")
@@ -338,6 +430,10 @@ fn main() -> Result<()> {
                         .stderr(Stdio::null())
                         .status();
                     let _ = tx.send(FetchMsg::Done(p.clone()));
+                    if ci_enabled {
+                        let ci = detect_ci(p);
+                        let _ = tx.send(FetchMsg::CiUpdate(p.clone(), ci));
+                    }
                 }
                 let _ = tx.send(FetchMsg::CycleFinished);
                 std::thread::sleep(interval);
@@ -377,14 +473,18 @@ fn main() -> Result<()> {
         palette_open: false,
         palette_query: String::new(),
         palette_selected: 0,
+        filter_open: false,
+        filter_query: String::new(),
         pending_lazygit: None,
         pending_shell: None,
         flash: None,
         last_auto_fetch: None,
         is_fetching: false,
+        fetching: HashSet::new(),
+        ci: std::collections::HashMap::new(),
     };
 
-    let res = run(&mut terminal, &mut app, &rx, &fetch_rx);
+    let res = run(&mut terminal, &mut app, &rx, &fetch_rx, fetch_tx.clone());
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -398,6 +498,7 @@ fn run<B: ratatui::backend::Backend + std::io::Write>(
     app: &mut App,
     rx: &mpsc::Receiver<DebounceEventResult>,
     fetch_rx: &mpsc::Receiver<FetchMsg>,
+    fetch_tx: mpsc::Sender<FetchMsg>,
 ) -> Result<()>
 where
     <B as ratatui::backend::Backend>::Error: Send + Sync + 'static,
@@ -412,6 +513,30 @@ where
                     continue;
                 }
                 let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+                if app.filter_open {
+                    match k.code {
+                        KeyCode::Char('c') if ctrl => return Ok(()),
+                        KeyCode::Esc => {
+                            app.filter_open = false;
+                            app.filter_query.clear();
+                            reselect_into_order(app);
+                        }
+                        KeyCode::Enter => {
+                            app.filter_open = false;
+                            reselect_into_order(app);
+                        }
+                        KeyCode::Backspace => {
+                            app.filter_query.pop();
+                            reselect_into_order(app);
+                        }
+                        KeyCode::Char(c) => {
+                            app.filter_query.push(c);
+                            reselect_into_order(app);
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
                 if app.palette_open {
                     match k.code {
                         KeyCode::Char('c') if ctrl => return Ok(()),
@@ -427,7 +552,7 @@ where
                             app.palette_query.clear();
                             app.palette_selected = 0;
                             if let Some(c) = cmd {
-                                if let Some(quit) = execute_cmd(app, c) {
+                                if let Some(quit) = execute_cmd(app, c, &fetch_tx) {
                                     if quit {
                                         return Ok(());
                                     }
@@ -461,12 +586,16 @@ where
                         app.palette_query.clear();
                         app.palette_selected = 0;
                     }
+                    KeyCode::Char('/') => {
+                        app.filter_open = true;
+                    }
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     KeyCode::Char('c') if ctrl => return Ok(()),
                     KeyCode::Char('r') => {
                         refresh_all(app);
                         app.detail_cache_key = None;
                     }
+                    KeyCode::Char('F') => fetch_focused(app, &fetch_tx),
                     KeyCode::Left | KeyCode::Char('h') => move_sel(app, -1, 0),
                     KeyCode::Right | KeyCode::Char('l') => move_sel(app, 1, 0),
                     KeyCode::Up | KeyCode::Char('k') => move_sel(app, 0, -1),
@@ -523,6 +652,7 @@ where
                     KeyCode::Char('o') => action_lazygit(app),
                     KeyCode::Char('s') => action_shell(app),
                     KeyCode::Char('g') => action_github(app),
+                    KeyCode::Char('A') => action_actions(app),
                     KeyCode::Char('y') => action_copy_path(app),
                     _ => {}
                 }
@@ -559,12 +689,27 @@ where
                 FetchMsg::CycleStarted => {
                     app.is_fetching = true;
                 }
+                FetchMsg::Started(p) => {
+                    app.fetching.insert(p);
+                }
                 FetchMsg::Done(p) => {
+                    app.fetching.remove(&p);
                     if let Some(idx) = app.repos.iter().position(|r| r.path == p) {
                         app.repos[idx] = status_for(&p);
                     }
                     if selected_path_for_fetch.as_ref() == Some(&p) {
                         app.detail_cache_key = None;
+                    }
+                }
+                FetchMsg::CiUpdate(p, info) => {
+                    app.fetching.remove(&p);
+                    match info {
+                        Some(s) => {
+                            app.ci.insert(p, s);
+                        }
+                        None => {
+                            app.ci.remove(&p);
+                        }
                     }
                 }
                 FetchMsg::CycleFinished => {
@@ -622,6 +767,17 @@ fn refresh_all(app: &mut App) {
         *r = status_for(&r.path);
     }
     app.last_refresh = Instant::now();
+}
+
+fn reselect_into_order(app: &mut App) {
+    let order = display_order(app);
+    if order.is_empty() {
+        return;
+    }
+    if !order.contains(&app.selected) {
+        app.selected = order[0];
+        app.detail_cache_key = None;
+    }
 }
 
 fn repo_for_path(app: &App, p: &Path) -> Option<PathBuf> {
@@ -847,6 +1003,224 @@ fn action_shell(app: &mut App) {
     }
 }
 
+fn step_start(msg: &str) {
+    eprint!("\r\x1b[K\x1b[33m⠋\x1b[0m {}", msg);
+    let _ = io::stderr().flush();
+}
+
+fn step_progress(i: usize, total: usize, name: &str) {
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let frame = FRAMES[i % FRAMES.len()];
+    eprint!(
+        "\r\x1b[K\x1b[33m{}\x1b[0m reading status ({}/{}) {}",
+        frame,
+        i + 1,
+        total,
+        name
+    );
+    let _ = io::stderr().flush();
+}
+
+fn step_done(msg: &str) {
+    eprintln!("\r\x1b[K\x1b[32m✓\x1b[0m {}", msg);
+}
+
+fn step_warn(msg: &str) {
+    eprintln!("\r\x1b[K\x1b[33m⚠\x1b[0m {}", msg);
+}
+
+fn step_fail(msg: &str) {
+    eprintln!("\r\x1b[K\x1b[31m✗\x1b[0m {}", msg);
+}
+
+fn gh_authed() -> bool {
+    match Command::new("gh")
+        .args(["auth", "status"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(s) => s.success(),
+        Err(_) => false,
+    }
+}
+
+fn detect_ci(path: &Path) -> Option<CiInfo> {
+    let owner_repo = github_owner_repo(path)?;
+    let commit = current_commit(path)?;
+    let out = Command::new("gh")
+        .args([
+            "run",
+            "list",
+            "--repo",
+            &owner_repo,
+            "--commit",
+            &commit,
+            "--limit",
+            "1",
+            "--json",
+            "status,conclusion,name,url",
+            "-q",
+            r#".[0] | [.status, .conclusion // "", .name, .url] | @tsv"#,
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = s.splitn(4, '\t').collect();
+    if parts.len() < 4 {
+        return None;
+    }
+    let state = ci_state_from(parts[0], parts[1])?;
+    let url = parts[3].to_string();
+    let failed_step = if state == CiState::Failure {
+        run_id_from_url(&url).and_then(|id| failed_step(&owner_repo, &id))
+    } else {
+        None
+    };
+    Some(CiInfo {
+        state,
+        name: parts[2].to_string(),
+        url,
+        failed_step,
+    })
+}
+
+fn run_id_from_url(url: &str) -> Option<String> {
+    url.rsplit('/').next().map(|s| s.to_string())
+}
+
+fn failed_step(owner_repo: &str, run_id: &str) -> Option<String> {
+    let out = Command::new("gh")
+        .args([
+            "run",
+            "view",
+            run_id,
+            "--repo",
+            owner_repo,
+            "--json",
+            "jobs",
+            "-q",
+            r#"[.jobs[] | select(.conclusion == "failure") | "\(.name) → \(.steps | map(select(.conclusion == "failure"))[0].name // "?")"] | .[0] // """#,
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+fn ci_state_from(status: &str, conclusion: &str) -> Option<CiState> {
+    Some(match (status, conclusion) {
+        ("completed", "success") => CiState::Success,
+        ("completed", "failure" | "cancelled" | "timed_out" | "startup_failure") => {
+            CiState::Failure
+        }
+        ("in_progress", _) | ("queued", _) | ("waiting", _) | ("requested", _) => {
+            CiState::Running
+        }
+        _ => CiState::Unknown,
+    })
+}
+
+fn github_owner_repo(path: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if let Some(rest) = url.strip_prefix("git@github.com:") {
+        return Some(rest.strip_suffix(".git").unwrap_or(rest).to_string());
+    }
+    if let Some(rest) = url.strip_prefix("https://github.com/") {
+        return Some(rest.strip_suffix(".git").unwrap_or(rest).to_string());
+    }
+    if let Some(rest) = url.strip_prefix("ssh://git@github.com/") {
+        return Some(rest.strip_suffix(".git").unwrap_or(rest).to_string());
+    }
+    None
+}
+
+fn current_commit(path: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn fetch_focused(app: &mut App, fetch_tx: &mpsc::Sender<FetchMsg>) {
+    let Some(repo) = app.repos.get(app.selected) else {
+        return;
+    };
+    let path = repo.path.clone();
+    let name = repo.name.clone();
+    let tx = fetch_tx.clone();
+    let _ = fetch_tx.send(FetchMsg::Started(path.clone()));
+    std::thread::spawn(move || {
+        let _ = Command::new("git")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .arg("-C")
+            .arg(&path)
+            .args(["fetch", "--quiet", "--no-write-fetch-head", "--all"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let _ = tx.send(FetchMsg::Done(path.clone()));
+        let ci = detect_ci(&path);
+        let _ = tx.send(FetchMsg::CiUpdate(path, ci));
+    });
+    app.flash_msg(format!("fetching {}…", name));
+}
+
+fn action_actions(app: &mut App) {
+    let Some(repo) = app.repos.get(app.selected) else {
+        return;
+    };
+    let Some(owner_repo) = github_owner_repo(&repo.path) else {
+        app.flash_msg("not a github remote");
+        return;
+    };
+    let url = if let Some(branch) = &repo.branch {
+        format!(
+            "https://github.com/{}/actions?query=branch%3A{}",
+            owner_repo, branch
+        )
+    } else {
+        format!("https://github.com/{}/actions", owner_repo)
+    };
+    open_url(&url);
+    app.flash_msg(format!("opened {}", url));
+}
+
 fn action_github(app: &mut App) {
     let Some(repo) = app.repos.get(app.selected) else {
         return;
@@ -924,7 +1298,7 @@ fn action_copy_path(app: &mut App) {
     }
 }
 
-fn execute_cmd(app: &mut App, cmd: Cmd) -> Option<bool> {
+fn execute_cmd(app: &mut App, cmd: Cmd, fetch_tx: &mpsc::Sender<FetchMsg>) -> Option<bool> {
     match cmd {
         Cmd::Pin => toggle_pin(app),
         Cmd::Hide => toggle_hidden(app),
@@ -940,12 +1314,14 @@ fn execute_cmd(app: &mut App, cmd: Cmd) -> Option<bool> {
         Cmd::OpenLazyGit => action_lazygit(app),
         Cmd::OpenShell => action_shell(app),
         Cmd::OpenGitHub => action_github(app),
+        Cmd::OpenActions => action_actions(app),
         Cmd::CopyPath => action_copy_path(app),
         Cmd::RefreshAll => {
             refresh_all(app);
             app.detail_cache_key = None;
             app.flash_msg("refreshed");
         }
+        Cmd::FetchFocused => fetch_focused(app, fetch_tx),
         Cmd::ToggleDetail => {
             app.show_detail = !app.show_detail;
         }
