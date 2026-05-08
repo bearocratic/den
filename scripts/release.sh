@@ -87,6 +87,19 @@ if [[ "$NEW" != "$VERSION" ]]; then
   exit 1
 fi
 
+# Pin the README's `cargo install --tag` example to the new release.
+if [[ -f README.md ]]; then
+  say "updating README.md cargo install tag to $TAG…"
+  TMP="$(mktemp)"
+  awk -v tag="$TAG" '
+    /cargo install --git https:\/\/github\.com\/bearocratic\/den --tag v[0-9]+\.[0-9]+\.[0-9]+/ {
+      sub(/--tag v[0-9]+\.[0-9]+\.[0-9]+/, "--tag " tag)
+    }
+    { print }
+  ' README.md > "$TMP"
+  mv "$TMP" README.md
+fi
+
 # Refresh Cargo.lock by running cargo check (cheaper than build).
 say "refreshing Cargo.lock…"
 cargo check --quiet
@@ -116,7 +129,7 @@ fi
 
 echo
 say "files staged for the release commit:"
-git --no-pager diff --stat -- Cargo.toml Cargo.lock "$NOTES"
+git --no-pager diff --stat -- Cargo.toml Cargo.lock README.md "$NOTES"
 echo
 
 read -r -p "commit, tag, and push $TAG? [y/N] " yn
@@ -126,7 +139,7 @@ if [[ "$yn" != "y" && "$yn" != "Y" ]]; then
 fi
 
 # Commit + tag with the bearocratic identity, regardless of local git config.
-git add Cargo.toml Cargo.lock "$NOTES"
+git add Cargo.toml Cargo.lock README.md "$NOTES"
 git -c user.name="$GIT_NAME" -c user.email="$GIT_EMAIL" \
     commit -m "chore(release): $TAG"
 git tag "$TAG"
