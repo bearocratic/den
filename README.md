@@ -102,4 +102,6 @@ tracks the latest tag.
 
 ## License
 
-Proprietary. See `LICENSE`.
+Open source under the [Apache License 2.0](LICENSE). The name "Den"
+and the Bearocratic logo are trademarks of Bearocratic OÜ — see `NOTICE`.
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).

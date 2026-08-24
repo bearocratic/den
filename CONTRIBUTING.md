@@ -1,10 +1,25 @@
 # Contributing to Den
 
-Den is developed in-house at Bearocratic. The project is open about its
-**releases** — bugs, ideas, and feedback are very welcome — but **closed**
-to drive-by code contributions.
+Den is open source under the [Apache License 2.0](LICENSE) and lives in
+this single repository. Contributions are welcome — and the tool stays
+small on purpose, so the bar for new surface area is deliberately high.
 
-## What's welcome
+## Pull requests
+
+- **Open an issue first** for anything bigger than a typo or an obvious
+  bug fix. Den is small on purpose; agreeing on the shape before you
+  write the code saves everyone a revert.
+- **Sign off every commit** (`git commit -s`). Den uses the
+  [Developer Certificate of Origin](https://developercertificate.org/) —
+  the sign-off certifies you have the right to submit the change.
+  Contributions land under Apache-2.0, the same license Den ships under.
+- **Keep it tight.** One change per PR, no drive-by refactors, follow
+  the style around you.
+- The maintainer has final say. A well-made PR can still be declined if
+  it grows Den in a direction the tool shouldn't go — the issue-first
+  rule exists to catch that early.
+
+## Bug reports and feature requests
 
 - **Bug reports.** Use the [Bug report](.github/ISSUE_TEMPLATE/bug-report.yml)
   template. The more specific, the better — Den version, platform, terminal,
@@ -16,17 +31,13 @@ to drive-by code contributions.
   [GitHub's private security advisory flow](https://github.com/bearocratic/den/security/advisories/new),
   or write to `security@bearocratic.io`.
 
-## What's not
+## Trademarks
 
-- **Unsolicited pull requests.** Forks and PRs from outside the maintainer
-  set are not accepted at this time. The repository's settings reflect
-  this — forking is disabled and `main` is protected by `CODEOWNERS`.
-  If you have a fix you genuinely want to land, open an issue first; if
-  it's the right shape we'll let you know.
-- **Repository-level discussion.** Issues are for actionable items.
-  Open-ended conversations belong on email.
+The code is Apache-2.0; the name is not. "Den" and the Bearocratic logo
+are trademarks of Bearocratic OÜ — fork freely, but ship your fork under
+your own name.
 
-## Why
+## Why the tight bar
 
 Den is small on purpose. Keeping the surface area tight — both code and
 behaviour — is the easiest way to keep it from drifting into something
