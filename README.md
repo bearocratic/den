@@ -5,6 +5,8 @@ dirty state at a glance — staged, modified, untracked, conflicts, ahead /
 behind, stash count, latest tag, and CI status — without leaving the
 terminal. Background `git fetch` keeps ahead/behind counts live.
 
+![den watching a folder of six repos: grouped tiles, then the detail pane with status and diff](assets/demo.gif)
+
 ## Install
 
 Homebrew (macOS, Linux):
