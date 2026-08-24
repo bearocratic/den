@@ -7,7 +7,7 @@ terminal. Background `git fetch` keeps ahead/behind counts live.
 
 ![den watching a folder of six repos: grouped tiles, then the detail pane with status and diff](assets/demo.gif)
 
-▶ [den in 60 seconds, with sound](https://youtu.be/D_HsJrh-_l8)
+▶ [den in 60 seconds](https://youtu.be/D_HsJrh-_l8)
 
 ## Install
 
