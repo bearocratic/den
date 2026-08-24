@@ -33,8 +33,8 @@ small on purpose, so the bar for new surface area is deliberately high.
 
 ## Trademarks
 
-The code is Apache-2.0; the name is not. "Den" and the Bearocratic logo
-are trademarks of Bearocratic OÜ — fork freely, but ship your fork under
+The code is Apache-2.0; the name is not. "Den" and the Bearocratic bear
+remain Bearocratic OÜ's marks — fork freely, but ship your fork under
 your own name.
 
 ## Why the tight bar
