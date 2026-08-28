@@ -1,6 +1,6 @@
 [package]
 name = "den"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021"
 license = "Apache-2.0"
 description = "TUI watcher for git repos in a base folder — shows dirty state at a glance"
