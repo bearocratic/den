@@ -70,7 +70,7 @@ say "pulling latest main…"
 git pull --ff-only
 
 # Bump Cargo.toml — first `version = "..."` line.
-say "bumping Cargo.toml to $VERSION…"
+say "bumping Cargo.toml to ${VERSION}…"
 TMP="$(mktemp)"
 awk -v ver="$VERSION" '
   !done && /^version[[:space:]]*=/ {
@@ -89,7 +89,7 @@ fi
 
 # Pin the README's `cargo install --tag` example to the new release.
 if [[ -f README.md ]]; then
-  say "updating README.md cargo install tag to $TAG…"
+  say "updating README.md cargo install tag to ${TAG}…"
   TMP="$(mktemp)"
   awk -v tag="$TAG" '
     /cargo install --git https:\/\/github\.com\/bearocratic\/den --tag v[0-9]+\.[0-9]+\.[0-9]+/ {
@@ -117,7 +117,7 @@ mv "$TMP" "$NOTES"
 
 # Open in editor.
 EDITOR_BIN="${VISUAL:-${EDITOR:-vim}}"
-say "opening $NOTES in $EDITOR_BIN…"
+say "opening $NOTES in ${EDITOR_BIN}…"
 "$EDITOR_BIN" "$NOTES"
 
 # Refuse to ship the untouched template.
@@ -144,7 +144,7 @@ git -c user.name="$GIT_NAME" -c user.email="$GIT_EMAIL" \
     commit -m "chore(release): $TAG"
 git tag "$TAG"
 
-say "pushing main + $TAG…"
+say "pushing main + ${TAG}…"
 git push origin main
 git push origin "$TAG"
 
