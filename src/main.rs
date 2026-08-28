@@ -730,6 +730,57 @@ fn main() -> Result<()> {
     res
 }
 
+/// Reassemble an arrow key whose escape sequence got split across
+/// reads. Terminals send arrows as CSI (`ESC [ A..D`) or, in
+/// application-cursor mode (tmux/ssh commonly), SS3 (`ESC O A..D`).
+/// When the bytes straddle a read boundary, crossterm emits a lone
+/// Esc followed by Char('[')/Char('O') and Char('A'..'D') — and den's
+/// letter bindings then fire: 'A' opened the Actions tab, 'O' the
+/// origin URL, and the lone Esc could quit. Called right after an
+/// unmodified Esc press: returns the arrow if the tail arrives within
+/// a few ms, else stashes whatever was read into `pending`.
+fn reassemble_split_arrow(
+    pending: &mut std::collections::VecDeque<Event>,
+) -> std::io::Result<Option<KeyCode>> {
+    const TAIL_WINDOW: Duration = Duration::from_millis(25);
+    if !event::poll(TAIL_WINDOW)? {
+        return Ok(None);
+    }
+    let intro = event::read()?;
+    let is_intro = matches!(
+        &intro,
+        Event::Key(k) if k.kind == KeyEventKind::Press
+            && matches!(k.code, KeyCode::Char('[') | KeyCode::Char('O'))
+            && k.modifiers.is_empty()
+    );
+    if !is_intro {
+        pending.push_back(intro);
+        return Ok(None);
+    }
+    if !event::poll(TAIL_WINDOW)? {
+        pending.push_back(intro);
+        return Ok(None);
+    }
+    let tail = event::read()?;
+    if let Event::Key(k) = &tail {
+        if k.kind == KeyEventKind::Press && k.modifiers.is_empty() {
+            let mapped = match k.code {
+                KeyCode::Char('A') => Some(KeyCode::Up),
+                KeyCode::Char('B') => Some(KeyCode::Down),
+                KeyCode::Char('C') => Some(KeyCode::Right),
+                KeyCode::Char('D') => Some(KeyCode::Left),
+                _ => None,
+            };
+            if mapped.is_some() {
+                return Ok(mapped);
+            }
+        }
+    }
+    pending.push_back(intro);
+    pending.push_back(tail);
+    Ok(None)
+}
+
 fn run<B: ratatui::backend::Backend + std::io::Write>(
     terminal: &mut Terminal<B>,
     app: &mut App,
@@ -740,14 +791,34 @@ fn run<B: ratatui::backend::Backend + std::io::Write>(
 where
     <B as ratatui::backend::Backend>::Error: Send + Sync + 'static,
 {
+    // Events stashed by the split-arrow reassembler (non-arrow keys
+    // read while probing for a sequence tail) — consumed before
+    // polling for new input so nothing is ever dropped.
+    let mut pending: std::collections::VecDeque<Event> = std::collections::VecDeque::new();
     loop {
         ensure_detail(app);
         terminal.draw(|f| ui::render(f, app))?;
 
-        if event::poll(Duration::from_millis(150))? {
-            if let Event::Key(k) = event::read()? {
+        let next = if let Some(stashed) = pending.pop_front() {
+            Some(stashed)
+        } else if event::poll(Duration::from_millis(150))? {
+            Some(event::read()?)
+        } else {
+            None
+        };
+        if let Some(ev) = next {
+            if let Event::Key(mut k) = ev {
                 if k.kind != KeyEventKind::Press {
                     continue;
+                }
+                // A lone unmodified Esc may be the head of a split
+                // arrow sequence — resolve it BEFORE any mode acts on
+                // Esc (quit!) or on the stray 'A'/'O' tail letters
+                // (which open browser windows).
+                if k.code == KeyCode::Esc && k.modifiers.is_empty() {
+                    if let Some(arrow) = reassemble_split_arrow(&mut pending)? {
+                        k.code = arrow;
+                    }
                 }
                 let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
                 if app.filter_open {
