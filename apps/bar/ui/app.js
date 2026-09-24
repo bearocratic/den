@@ -178,16 +178,22 @@ function render(snapshot) {
   // nothing else can say: what the modifiers do.
   el.meta.textContent = snapshot.scanning ? 'scanning…' : '⌘ GitHub · ⌥ editor · ⇧ Finder';
 
-  // The item carries its own state: an invitation to ask, the asking,
-  // the answer, or the update itself.
+  // A build with no updater configured cannot check, so it does not
+  // offer to: it says which version it is and leaves it there.
+  el.update.hidden = false;
   el.update.classList.toggle('is-offer', Boolean(snapshot.update));
-  el.update.textContent = snapshot.update
+  el.update.classList.toggle('is-static', !snapshot.updatable);
+  if (!snapshot.updatable) {
+    el.update.textContent = `den ${snapshot.version}`;
+  } else {
+    el.update.textContent = snapshot.update
     ? `Update to ${snapshot.update}`
     : snapshot.checking
       ? 'Checking…'
       : snapshot.checked
         ? `den ${snapshot.version} · up to date`
         : `den ${snapshot.version} · check for updates…`;
+  }
 
   el.ciAge.textContent = snapshot.gh
     ? snapshot.ci_age_secs == null
@@ -201,6 +207,7 @@ el.refresh.addEventListener('click', () => invoke('rescan'));
 el.add.addEventListener('click', () => invoke('add_folder'));
 el.quit.addEventListener('click', () => invoke('quit'));
 el.update.addEventListener('click', () => {
+  if (el.update.classList.contains('is-static')) return;
   if (el.update.classList.contains('is-offer')) {
     el.update.textContent = 'Updating…';
     invoke('install_update');

@@ -461,6 +461,13 @@ fn main() -> Result<()> {
     let bases_strings: Vec<String> = bases.iter().map(|p| p.display().to_string()).collect();
     session::save_lines(&session_dir.join("bases.txt"), &bases_strings);
 
+    // A folder worth opening here is worth watching in the menu bar,
+    // if that app is installed. It reads the same list and follows it
+    // while it runs, so this reaches a running den at once.
+    if den_core::BarConfig::adopt(&bases) {
+        step_done("added to the menu bar's folders");
+    }
+
     let (tx, rx) = mpsc::channel::<DebounceEventResult>();
     let mut debouncer = new_debouncer(Duration::from_millis(400), move |res| {
         let _ = tx.send(res);

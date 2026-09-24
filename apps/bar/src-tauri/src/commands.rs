@@ -87,8 +87,23 @@ pub fn hide_panel(app: AppHandle) {
 
 /// The folder picker, shared by the panel's button and the tray menu.
 pub fn pick_folder(app: AppHandle) {
+    // An accessory app cannot put a window in front: it is not in the
+    // Dock, it never becomes active, and the open panel it asks for
+    // opens behind everything or not at all. So den becomes an
+    // ordinary app for exactly as long as the dialog is up.
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    #[cfg(target_os = "macos")]
+    if let Some(window) = app.get_webview_window(crate::tray::PANEL) {
+        let _ = window.set_focus();
+    }
+
     let handle = app.clone();
     app.dialog().file().pick_folder(move |chosen| {
+        // Back to an agent, whatever the answer was.
+        #[cfg(target_os = "macos")]
+        let _ = handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
         let Some(folder) = chosen else { return };
         let Ok(path) = folder.into_path() else { return };
         {

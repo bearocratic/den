@@ -3,84 +3,13 @@
 //! The scan itself is `den_core`; this module only shapes the result
 //! for a webview and remembers which folders the menu bar watches.
 
+use den_core::bar::BarConfig;
 use den_core::repo::{discover, status_for, RepoStatus};
 use den_core::{display_order, session, CiInfo, CiState, OrderView, SortMode};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-
-/// How deep into a folder a repository may sit, when nothing says otherwise.
-pub const DEFAULT_DEPTH: usize = 4;
-/// A menu bar app runs all day, so it fetches far less often than the TUI.
-pub const DEFAULT_FETCH_SECS: u64 = 900;
-
-// ── the folders this bar watches ──────────────────────────────────
-// The CLI's sessions are keyed by the set of folders they were opened
-// with, which makes them a poor registry of "everything I watch". The
-// bar keeps its own list and seeds it, once, from the folders the CLI
-// has already seen.
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct BarConfig {
-    #[serde(default)]
-    pub folders: Vec<PathBuf>,
-    #[serde(default)]
-    pub depth: Option<usize>,
-    #[serde(default)]
-    pub fetch_interval_secs: Option<u64>,
-}
-
-impl BarConfig {
-    pub fn path() -> PathBuf {
-        session::den_dir().join("bar.toml")
-    }
-
-    pub fn load() -> Self {
-        if let Ok(text) = std::fs::read_to_string(Self::path()) {
-            if let Ok(cfg) = toml::from_str::<BarConfig>(&text) {
-                return cfg;
-            }
-        }
-        let mut cfg = BarConfig::default();
-        for (_, bases, _) in session::list_sessions() {
-            for base in bases {
-                if !cfg.folders.contains(&base) {
-                    cfg.folders.push(base);
-                }
-            }
-        }
-        cfg.folders = prune_nested(cfg.folders);
-        cfg.save();
-        cfg
-    }
-
-    /// Add a folder unless it is already watched, or already inside
-    /// something watched. Returns whether the list changed.
-    pub fn add_folder(&mut self, folder: PathBuf) -> bool {
-        if self.folders.iter().any(|f| folder.starts_with(f)) {
-            return false;
-        }
-        self.folders.push(folder);
-        self.folders = prune_nested(std::mem::take(&mut self.folders));
-        true
-    }
-
-    pub fn save(&self) {
-        session::ensure_dir(&session::den_dir());
-        if let Ok(text) = toml::to_string_pretty(self) {
-            let _ = std::fs::write(Self::path(), text);
-        }
-    }
-
-    pub fn depth(&self) -> usize {
-        self.depth.unwrap_or(DEFAULT_DEPTH)
-    }
-
-    pub fn fetch_secs(&self) -> u64 {
-        self.fetch_interval_secs.unwrap_or(DEFAULT_FETCH_SECS)
-    }
-}
 
 /// A name for each folder, long enough to tell them apart.
 ///
@@ -122,20 +51,6 @@ pub fn label_folders(folders: &[PathBuf]) -> Vec<String> {
         });
     }
     labels
-}
-
-/// Watching a folder and a folder inside it lists every nested
-/// repository twice, so the inner one goes.
-fn prune_nested(folders: Vec<PathBuf>) -> Vec<PathBuf> {
-    let mut kept: Vec<PathBuf> = Vec::new();
-    for folder in folders {
-        if kept.iter().any(|k| folder.starts_with(k)) {
-            continue;
-        }
-        kept.retain(|k| !k.starts_with(&folder));
-        kept.push(folder);
-    }
-    kept
 }
 
 // ── what the panel receives ───────────────────────────────────────
@@ -196,6 +111,8 @@ pub struct Snapshot {
     pub folders: Vec<FolderView>,
     /// The version running right now, so the menu can say it.
     pub version: String,
+    /// Whether this build can fetch its own next version at all.
+    pub updatable: bool,
     pub update: Option<String>,
     pub checking: bool,
     pub checked: bool,
@@ -208,6 +125,7 @@ pub struct Snapshot {
 /// Everything the bar holds between scans.
 pub struct Model {
     pub version: String,
+    pub updatable: bool,
     pub cfg: BarConfig,
     pub repos: Vec<RepoStatus>,
     pub ci: HashMap<PathBuf, CiInfo>,
@@ -225,10 +143,11 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn new(version: String) -> Self {
+    pub fn new(version: String, updatable: bool) -> Self {
         let cfg = BarConfig::load();
         let mut m = Model {
             version,
+            updatable,
             cfg,
             repos: Vec::new(),
             ci: HashMap::new(),
@@ -285,6 +204,7 @@ impl Model {
         Snapshot {
             folders,
             version: self.version.clone(),
+            updatable: self.updatable,
             update: self.update.clone(),
             checking: self.checking,
             checked: self.checked,
@@ -381,27 +301,10 @@ impl Model {
 
 #[cfg(test)]
 mod tests {
-    use super::prune_nested;
     use std::path::PathBuf;
 
     fn paths(v: &[&str]) -> Vec<PathBuf> {
         v.iter().map(PathBuf::from).collect()
-    }
-
-    #[test]
-    fn a_folder_inside_another_watched_folder_is_dropped() {
-        assert_eq!(
-            prune_nested(paths(&["/work", "/work/den", "/personal"])),
-            paths(&["/work", "/personal"])
-        );
-    }
-
-    #[test]
-    fn the_outer_folder_wins_even_when_it_arrives_second() {
-        assert_eq!(
-            prune_nested(paths(&["/work/den", "/work"])),
-            paths(&["/work"])
-        );
     }
 
     #[test]
@@ -428,14 +331,6 @@ mod tests {
         assert_eq!(
             super::label_folders(&paths(&["/a/x/projects", "/b/y/projects", "/c/notes"])),
             vec!["x/projects", "y/projects", "notes"]
-        );
-    }
-
-    #[test]
-    fn a_shared_prefix_is_not_containment() {
-        assert_eq!(
-            prune_nested(paths(&["/work", "/work-notes"])),
-            paths(&["/work", "/work-notes"])
         );
     }
 }

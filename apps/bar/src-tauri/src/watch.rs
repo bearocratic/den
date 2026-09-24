@@ -165,6 +165,55 @@ pub fn spawn_fs_watcher(app: AppHandle, folders: Vec<PathBuf>) -> Sender<Vec<Pat
     tx
 }
 
+/// Follow the folder list itself.
+///
+/// The list is a file two surfaces write: this app when someone adds
+/// a folder, and `den <folder>` in a terminal. A config read once at
+/// startup would mean the app quietly disagreed with the file for as
+/// long as it ran.
+pub fn spawn_config_watcher(app: AppHandle) {
+    std::thread::spawn(move || {
+        let handle = app.clone();
+        let debouncer = new_debouncer(
+            Duration::from_millis(400),
+            move |res: DebounceEventResult| {
+                let Ok(events) = res else { return };
+                if !events.iter().any(|e| e.path.ends_with("bar.toml")) {
+                    return;
+                }
+                let shared = handle.state::<Arc<Mutex<Model>>>().inner().clone();
+                let fresh = den_core::BarConfig::load();
+                let changed = {
+                    let mut m = shared.lock().unwrap();
+                    let changed = m.cfg.folders != fresh.folders;
+                    m.cfg = fresh;
+                    changed
+                };
+                if !changed {
+                    // Our own save, coming back to us.
+                    return;
+                }
+                log("the folder list changed on disk");
+                rewatch(&handle);
+                rescan(&handle, true);
+            },
+        );
+        let Ok(mut debouncer) = debouncer else { return };
+        let dir = den_core::session::den_dir();
+        den_core::session::ensure_dir(&dir);
+        if debouncer
+            .watcher()
+            .watch(&dir, RecursiveMode::NonRecursive)
+            .is_err()
+        {
+            return;
+        }
+        loop {
+            std::thread::sleep(Duration::from_secs(3600));
+        }
+    });
+}
+
 /// Ask GitHub what CI made of each repository, slowly.
 pub fn spawn_fetch_loop(app: AppHandle) {
     std::thread::spawn(move || {

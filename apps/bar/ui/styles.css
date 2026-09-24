@@ -163,3 +163,6 @@ hr {
 /* The item that answers "am I current?" — quiet until it has
    something to offer. */
 .item-update.is-offer { color: var(--forest); }
+/* A build that cannot update is a label, not a button. */
+.item-update.is-static { color: var(--tertiary); }
+.item-update.is-static:hover { background: none; color: var(--tertiary); }

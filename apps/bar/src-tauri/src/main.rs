@@ -35,10 +35,22 @@ pub fn quit(app: &tauri::AppHandle) {
 }
 
 fn main() {
-    tauri::Builder::default()
+    // Where an update comes from is not in this repository — a build
+    // from source has no updater configured, and the plugin refuses
+    // to start without one. So it is added only when a configuration
+    // for it exists, and a build without one simply never offers an
+    // update.
+    let context = tauri::generate_context!();
+    let updatable = context.config().plugins.0.contains_key("updater");
+
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_process::init());
+    if updatable {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
+    builder
         .invoke_handler(tauri::generate_handler![
             commands::snapshot,
             commands::rescan,
@@ -51,7 +63,7 @@ fn main() {
             commands::check_updates,
             commands::install_update,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // No Dock icon. Info.plist asks for that with LSUIElement
             // and the bundle carries it, but Tauri sets the activation
             // policy to Regular as it starts and that wins — so it has
@@ -59,7 +71,7 @@ fn main() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            let model = Model::new(app.package_info().version.to_string());
+            let model = Model::new(app.package_info().version.to_string(), updatable);
             let folders = model.cfg.folders.clone();
             app.manage(Arc::new(Mutex::new(model)));
             app.manage(Arc::new(watch::Scans::default()));
@@ -99,14 +111,17 @@ fn main() {
             tray::build(app.handle())?;
             let rewatch = watch::spawn_fs_watcher(app.handle().clone(), folders);
             app.manage(watch::Rewatch(rewatch));
+            watch::spawn_config_watcher(app.handle().clone());
             watch::spawn_fetch_loop(app.handle().clone());
-            update::spawn_checks(app.handle().clone());
+            if updatable {
+                update::spawn_checks(app.handle().clone());
+            }
 
             let first = app.handle().clone();
             std::thread::spawn(move || watch::rescan(&first, true));
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("den failed to start")
         .run(|_app, event| {
             // Closing the panel is not quitting: the glyph stays.

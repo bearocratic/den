@@ -5,6 +5,7 @@
 //! the GitHub lookups, the ordering rule and the palette, and nothing
 //! that assumes a terminal or a window.
 
+pub mod bar;
 pub mod brand;
 pub mod github;
 pub mod model;
@@ -12,6 +13,7 @@ pub mod order;
 pub mod repo;
 pub mod session;
 
+pub use bar::BarConfig;
 pub use model::{CiInfo, CiState, FetchMsg, PrInfo, SortMode};
 pub use order::{display_order, state_priority, OrderView};
 pub use repo::{is_noise, CommitInfo, RepoStatus, TagInfo};
