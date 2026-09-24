@@ -59,6 +59,12 @@ pub fn remove_folder(app: AppHandle, path: String) {
     std::thread::spawn(move || crate::watch::rescan(&handle, true));
 }
 
+/// Ask now, because someone wants to know.
+#[tauri::command]
+pub async fn check_updates(app: AppHandle) {
+    crate::update::look(&app, true).await;
+}
+
 /// Fetch the version the check found and come back as it.
 #[tauri::command]
 pub async fn install_update(app: AppHandle) -> Result<(), String> {

@@ -160,6 +160,6 @@ hr {
   font-size: 11px;
 }
 
-/* The one item that is not always there. */
-.item-update { color: var(--forest); }
-.item-update:hover { background: AccentColor; color: AccentColorText; }
+/* The item that answers "am I current?" — quiet until it has
+   something to offer. */
+.item-update.is-offer { color: var(--forest); }

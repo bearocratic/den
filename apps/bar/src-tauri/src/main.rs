@@ -37,6 +37,7 @@ fn main() {
             commands::remove_folder,
             commands::hide_panel,
             commands::quit,
+            commands::check_updates,
             commands::install_update,
         ])
         .setup(|app| {

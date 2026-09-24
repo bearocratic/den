@@ -31,10 +31,11 @@ pub fn set_badge(app: &AppHandle, badge: Badge) {
 
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let refresh = MenuItem::with_id(app, "refresh", "Refresh now", true, None::<&str>)?;
+    let check = MenuItem::with_id(app, "check", "Check for updates…", true, None::<&str>)?;
     let add = MenuItem::with_id(app, "add", "Add folder…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit den", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&refresh, &add, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&refresh, &check, &add, &sep, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
@@ -44,6 +45,14 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             "refresh" => {
                 let handle = app.clone();
                 std::thread::spawn(move || crate::watch::rescan(&handle, true));
+            }
+            "check" => {
+                // The answer lands in the panel, which is where an
+                // update would be pressed anyway.
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::update::look(&handle, true).await;
+                });
             }
             "add" => crate::commands::pick_folder(app.clone()),
             "quit" => app.exit(0),

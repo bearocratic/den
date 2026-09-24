@@ -195,6 +195,8 @@ pub struct FolderView {
 pub struct Snapshot {
     pub folders: Vec<FolderView>,
     pub update: Option<String>,
+    pub checking: bool,
+    pub checked: bool,
     pub badge: Badge,
     pub scanning: bool,
     pub ci_age_secs: Option<u64>,
@@ -211,6 +213,10 @@ pub struct Model {
     pub scanning: bool,
     /// The version waiting to be installed, once a check has found one.
     pub update: Option<String>,
+    /// A check is running because someone asked for it.
+    pub checking: bool,
+    /// Someone has asked, so "up to date" is worth saying.
+    pub checked: bool,
     pub hidden: HashSet<PathBuf>,
     pub pinned: HashSet<PathBuf>,
 }
@@ -226,6 +232,8 @@ impl Model {
             gh: false,
             scanning: false,
             update: None,
+            checking: false,
+            checked: false,
             hidden: HashSet::new(),
             pinned: HashSet::new(),
         };
@@ -273,6 +281,8 @@ impl Model {
         Snapshot {
             folders,
             update: self.update.clone(),
+            checking: self.checking,
+            checked: self.checked,
             badge,
             scanning: self.scanning,
             ci_age_secs: self
@@ -400,7 +410,10 @@ mod tests {
     #[test]
     fn two_folders_of_one_name_grow_until_they_differ() {
         assert_eq!(
-            super::label_folders(&paths(&["/Users/j/work/projects", "/Users/j/personal/projects"])),
+            super::label_folders(&paths(&[
+                "/Users/j/work/projects",
+                "/Users/j/personal/projects"
+            ])),
             vec!["work/projects", "personal/projects"]
         );
     }

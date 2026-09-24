@@ -178,9 +178,16 @@ function render(snapshot) {
   // nothing else can say: what the modifiers do.
   el.meta.textContent = snapshot.scanning ? 'scanning…' : '⌘ GitHub · ⌥ editor · ⇧ Finder';
 
-  // Nothing is said about updates until there is one to install.
-  el.update.hidden = !snapshot.update;
-  if (snapshot.update) el.update.textContent = `Update to ${snapshot.update}`;
+  // The item carries its own state: an invitation to ask, the asking,
+  // the answer, or the update itself.
+  el.update.classList.toggle('is-offer', Boolean(snapshot.update));
+  el.update.textContent = snapshot.update
+    ? `Update to ${snapshot.update}`
+    : snapshot.checking
+      ? 'Checking…'
+      : snapshot.checked
+        ? 'den is up to date'
+        : 'Check for updates…';
 
   el.ciAge.textContent = snapshot.gh
     ? snapshot.ci_age_secs == null
@@ -194,8 +201,12 @@ el.refresh.addEventListener('click', () => invoke('rescan'));
 el.add.addEventListener('click', () => invoke('add_folder'));
 el.quit.addEventListener('click', () => invoke('quit'));
 el.update.addEventListener('click', () => {
-  el.update.textContent = 'Updating…';
-  invoke('install_update');
+  if (el.update.classList.contains('is-offer')) {
+    el.update.textContent = 'Updating…';
+    invoke('install_update');
+  } else {
+    invoke('check_updates');
+  }
 });
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') invoke('hide_panel');
