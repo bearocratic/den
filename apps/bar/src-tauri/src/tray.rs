@@ -122,4 +122,14 @@ fn toggle_panel(app: &AppHandle, icon_x: f64, icon_y: f64, icon_w: f64, icon_h: 
     let _ = window.set_focus();
     let handle = app.clone();
     std::thread::spawn(move || crate::watch::rescan(&handle, true));
+
+    // Opening the menu after a while is a fair moment to ask again:
+    // the six-hour timer is silent, and a stale "up to date" is worse
+    // than no answer.
+    let asking = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if crate::update::stale(&asking) {
+            crate::update::look(&asking, true).await;
+        }
+    });
 }

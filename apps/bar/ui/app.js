@@ -186,13 +186,16 @@ function render(snapshot) {
   if (!snapshot.updatable) {
     el.update.textContent = `den ${snapshot.version}`;
   } else {
+    // "Up to date" was only true when it was asked, so it stops being
+    // said a minute later rather than standing for the rest of the day.
+    const fresh = snapshot.checked_secs != null && snapshot.checked_secs < 60;
     el.update.textContent = snapshot.update
-    ? `Update to ${snapshot.update}`
-    : snapshot.checking
-      ? 'Checking…'
-      : snapshot.checked
-        ? `den ${snapshot.version} · up to date`
-        : `den ${snapshot.version} · check for updates…`;
+      ? `Update to ${snapshot.update}`
+      : snapshot.checking
+        ? 'Checking…'
+        : fresh
+          ? `den ${snapshot.version} · up to date`
+          : `den ${snapshot.version} · check for updates…`;
   }
 
   el.ciAge.textContent = snapshot.gh

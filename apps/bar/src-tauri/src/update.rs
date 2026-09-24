@@ -13,6 +13,18 @@ use tauri_plugin_updater::UpdaterExt;
 
 /// How often a long-running app asks whether it is out of date.
 const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// How old an answer may be before opening the menu asks again.
+const ASK_AGAIN: Duration = Duration::from_secs(30 * 60);
+
+/// Whether the last answer is old enough to be worth asking again.
+pub fn stale(app: &AppHandle) -> bool {
+    let shared = app.state::<Arc<Mutex<Model>>>().inner().clone();
+    let m = shared.lock().unwrap();
+    match m.checked_at {
+        Some(at) => at.elapsed().map(|d| d > ASK_AGAIN).unwrap_or(true),
+        None => true,
+    }
+}
 
 /// Ask once and remember the answer.
 ///
@@ -37,7 +49,7 @@ pub async fn look(app: &AppHandle, told: bool) -> Option<String> {
         m.checking = false;
         m.update = version.clone();
         if told {
-            m.checked = true;
+            m.checked_at = Some(std::time::SystemTime::now());
         }
     }
     crate::watch::publish(app, &shared);

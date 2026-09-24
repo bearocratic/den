@@ -115,7 +115,8 @@ pub struct Snapshot {
     pub updatable: bool,
     pub update: Option<String>,
     pub checking: bool,
-    pub checked: bool,
+    /// Seconds since the last answer, if it is recent enough to show.
+    pub checked_secs: Option<u64>,
     pub badge: Badge,
     pub scanning: bool,
     pub ci_age_secs: Option<u64>,
@@ -136,8 +137,8 @@ pub struct Model {
     pub update: Option<String>,
     /// A check is running because someone asked for it.
     pub checking: bool,
-    /// Someone has asked, so "up to date" is worth saying.
-    pub checked: bool,
+    /// When someone last asked, so "up to date" can stop being said.
+    pub checked_at: Option<SystemTime>,
     pub hidden: HashSet<PathBuf>,
     pub pinned: HashSet<PathBuf>,
 }
@@ -156,7 +157,7 @@ impl Model {
             scanning: false,
             update: None,
             checking: false,
-            checked: false,
+            checked_at: None,
             hidden: HashSet::new(),
             pinned: HashSet::new(),
         };
@@ -207,7 +208,10 @@ impl Model {
             updatable: self.updatable,
             update: self.update.clone(),
             checking: self.checking,
-            checked: self.checked,
+            checked_secs: self
+                .checked_at
+                .and_then(|t| SystemTime::now().duration_since(t).ok())
+                .map(|d| d.as_secs()),
             badge,
             scanning: self.scanning,
             ci_age_secs: self
