@@ -1,3 +1,6 @@
+[workspace]
+members = ["crates/den-core"]
+
 [package]
 name = "den"
 version = "0.8.1"
@@ -7,16 +10,14 @@ description = "TUI watcher for git repos in a base folder — shows dirty state 
 
 [dependencies]
 anyhow = "1"
+den-core = { path = "crates/den-core" }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
-git2 = { version = "0.20", default-features = false }
 notify = "6"
 notify-debouncer-mini = "0.4"
 pulldown-cmark = { version = "0.12", default-features = false }
 ratatui = "0.30"
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
-walkdir = "2"
 
 [profile.release]
 lto = true

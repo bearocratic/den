@@ -378,11 +378,19 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm 0.28.1",
- "git2",
+ "den-core",
  "notify",
  "notify-debouncer-mini",
  "pulldown-cmark",
  "ratatui",
+ "serde",
+]
+
+[[package]]
+name = "den-core"
+version = "0.8.1"
+dependencies = [
+ "git2",
  "serde",
  "toml",
  "walkdir",

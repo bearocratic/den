@@ -1,7 +1,5 @@
 mod brand;
 mod markdown;
-mod repo;
-mod session;
 mod ui;
 
 use anyhow::Result;
@@ -21,7 +19,9 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use crate::repo::{discover, status_for, RepoStatus};
+use den_core::repo::{discover, status_for, RepoStatus};
+use den_core::session;
+use den_core::{github, CiInfo, CiState, FetchMsg, OrderView, PrInfo, SortMode};
 
 #[derive(Parser, Debug)]
 #[command(name = "den", version, about = "TUI watcher for dirty git repos")]
@@ -62,87 +62,10 @@ enum Subcmd {
     },
 }
 
-#[derive(Debug, Clone)]
-pub enum FetchMsg {
-    CycleStarted,
-    Started(PathBuf),
-    Done(PathBuf),
-    CiUpdate(PathBuf, Option<CiInfo>),
-    PrUpdate(PathBuf, Option<Vec<PrInfo>>),
-    CycleFinished,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CiState {
-    Success,
-    Failure,
-    Running,
-    Unknown,
-}
-
-#[derive(Debug, Clone)]
-pub struct PrInfo {
-    pub number: u64,
-    pub title: String,
-    pub url: String,
-    pub age: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct CiInfo {
-    pub state: CiState,
-    pub name: String,
-    pub url: String,
-    pub failed_step: Option<String>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailSection {
     Status,
     Diff,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SortMode {
-    Default,
-    CiRedFirst,
-    DirtyFirst,
-    ByRecency,
-}
-
-impl SortMode {
-    pub fn next(self) -> Self {
-        match self {
-            SortMode::Default => SortMode::CiRedFirst,
-            SortMode::CiRedFirst => SortMode::DirtyFirst,
-            SortMode::DirtyFirst => SortMode::ByRecency,
-            SortMode::ByRecency => SortMode::Default,
-        }
-    }
-    pub fn label(self) -> &'static str {
-        match self {
-            SortMode::Default => "default",
-            SortMode::CiRedFirst => "ci red first",
-            SortMode::DirtyFirst => "dirty first",
-            SortMode::ByRecency => "by recency",
-        }
-    }
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SortMode::Default => "default",
-            SortMode::CiRedFirst => "ci_red_first",
-            SortMode::DirtyFirst => "dirty_first",
-            SortMode::ByRecency => "by_recency",
-        }
-    }
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "ci_red_first" => SortMode::CiRedFirst,
-            "dirty_first" => SortMode::DirtyFirst,
-            "by_recency" => SortMode::ByRecency,
-            _ => SortMode::Default,
-        }
-    }
 }
 
 impl DetailSection {
@@ -416,77 +339,16 @@ impl App {
 }
 
 pub fn display_order(app: &App) -> Vec<usize> {
-    let q = app.filter_query.trim().to_lowercase();
-    let mut idx: Vec<usize> = (0..app.repos.len())
-        .filter(|i| {
-            let r = &app.repos[*i];
-            if !app.show_hidden && app.hidden.contains(&r.path) {
-                return false;
-            }
-            if !q.is_empty() && !r.name.to_lowercase().contains(&q) {
-                return false;
-            }
-            if let Some(bi) = app.base_filter {
-                if let Some(base) = app.bases.get(bi) {
-                    if !r.path.starts_with(base) {
-                        return false;
-                    }
-                }
-            }
-            true
-        })
-        .collect();
-    idx.sort_by(|&a, &b| {
-        let ra = &app.repos[a];
-        let rb = &app.repos[b];
-        let ha = app.hidden.contains(&ra.path);
-        let hb = app.hidden.contains(&rb.path);
-        if ha != hb {
-            return ha.cmp(&hb);
-        }
-        let pa = app.pinned.contains(&ra.path);
-        let pb = app.pinned.contains(&rb.path);
-        if pa != pb {
-            return pb.cmp(&pa);
-        }
-        match app.sort_mode {
-            SortMode::DirtyFirst => {
-                let pa = state_priority(ra);
-                let pb = state_priority(rb);
-                if pa != pb {
-                    return pa.cmp(&pb);
-                }
-            }
-            SortMode::ByRecency => {
-                let ta = ra.last_commit.as_ref().map(|c| c.time);
-                let tb = rb.last_commit.as_ref().map(|c| c.time);
-                if ta != tb {
-                    return tb.cmp(&ta);
-                }
-            }
-            _ => {
-                let pa = state_priority(ra);
-                let pb = state_priority(rb);
-                if pa != pb {
-                    return pa.cmp(&pb);
-                }
-            }
-        }
-        ra.name.cmp(&rb.name)
-    });
-    idx
-}
-
-fn state_priority(r: &RepoStatus) -> u8 {
-    if r.has_conflict() || r.error.is_some() {
-        0
-    } else if r.is_uninitialized() {
-        3
-    } else if !r.is_clean() {
-        1
-    } else {
-        2
-    }
+    den_core::display_order(&OrderView {
+        repos: &app.repos,
+        filter_query: &app.filter_query,
+        show_hidden: app.show_hidden,
+        hidden: &app.hidden,
+        pinned: &app.pinned,
+        bases: &app.bases,
+        base_filter: app.base_filter,
+        sort_mode: app.sort_mode,
+    })
 }
 
 fn main() -> Result<()> {
@@ -524,9 +386,8 @@ fn main() -> Result<()> {
         }
         Some(Subcmd::Open { id }) => {
             let bases_file = session::session_dir(id).join("bases.txt");
-            let raw = std::fs::read_to_string(&bases_file).map_err(|_| {
-                anyhow::anyhow!("no session with id {}", id)
-            })?;
+            let raw = std::fs::read_to_string(&bases_file)
+                .map_err(|_| anyhow::anyhow!("no session with id {}", id))?;
             for line in raw.lines() {
                 let line = line.trim();
                 if line.is_empty() {
@@ -571,10 +432,7 @@ fn main() -> Result<()> {
     let total = repo_paths.len();
     let mut statuses: Vec<RepoStatus> = Vec::with_capacity(total);
     for (i, p) in repo_paths.iter().enumerate() {
-        let name = p
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("?");
+        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("?");
         step_progress(i, total, name);
         statuses.push(status_for(p));
     }
@@ -583,7 +441,7 @@ fn main() -> Result<()> {
 
     if args.no_ci {
         step_warn("CI badges disabled (--no-ci)");
-    } else if gh_authed() {
+    } else if github::gh_authed() {
         step_done("gh authenticated");
     } else {
         step_warn(
@@ -600,10 +458,7 @@ fn main() -> Result<()> {
     let pinned = session::load_path_set(&session_dir.join("pins.txt"));
     let hidden = session::load_path_set(&session::den_dir().join("hidden.txt"));
     let settings = session::load_settings(&session_id);
-    let bases_strings: Vec<String> = bases
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect();
+    let bases_strings: Vec<String> = bases.iter().map(|p| p.display().to_string()).collect();
     session::save_lines(&session_dir.join("bases.txt"), &bases_strings);
 
     let (tx, rx) = mpsc::channel::<DebounceEventResult>();
@@ -624,9 +479,9 @@ fn main() -> Result<()> {
                 let _ = tx.send(FetchMsg::Started(p.clone()));
             }
             for p in &paths {
-                let ci = detect_ci(p);
+                let ci = github::detect_ci(p);
                 let _ = tx.send(FetchMsg::CiUpdate(p.clone(), ci));
-                let prs = detect_prs(p);
+                let prs = github::detect_prs(p);
                 let _ = tx.send(FetchMsg::PrUpdate(p.clone(), prs));
             }
         });
@@ -654,9 +509,9 @@ fn main() -> Result<()> {
                         .status();
                     let _ = tx.send(FetchMsg::Done(p.clone()));
                     if ci_enabled {
-                        let ci = detect_ci(p);
+                        let ci = github::detect_ci(p);
                         let _ = tx.send(FetchMsg::CiUpdate(p.clone(), ci));
-                        let prs = detect_prs(p);
+                        let prs = github::detect_prs(p);
                         let _ = tx.send(FetchMsg::PrUpdate(p.clone(), prs));
                     }
                 }
@@ -1049,8 +904,7 @@ where
                             let new_state = s.state;
                             app.ci.insert(p.clone(), s);
                             if old_state == Some(CiState::Running)
-                                && (new_state == CiState::Success
-                                    || new_state == CiState::Failure)
+                                && (new_state == CiState::Success || new_state == CiState::Failure)
                             {
                                 let label = match new_state {
                                     CiState::Success => "passed",
@@ -1196,10 +1050,7 @@ fn move_sel(app: &mut App, dx: i32, dy: i32) {
     if order.is_empty() {
         return;
     }
-    let cur_pos = order
-        .iter()
-        .position(|&i| i == app.selected)
-        .unwrap_or(0) as i32;
+    let cur_pos = order.iter().position(|&i| i == app.selected).unwrap_or(0) as i32;
     let cols = app.cols.max(1) as i32;
     let mut pos = cur_pos + dx + dy * cols;
     if pos < 0 {
@@ -1254,14 +1105,7 @@ fn fetch_status(path: &Path) -> String {
 }
 
 fn fetch_stash(path: &Path) -> String {
-    run_git(
-        path,
-        &[
-            "stash",
-            "list",
-            "--pretty=format:%gd\x1f%cr\x1f%s",
-        ],
-    )
+    run_git(path, &["stash", "list", "--pretty=format:%gd\x1f%cr\x1f%s"])
 }
 
 fn fetch_diff(path: &Path) -> String {
@@ -1461,196 +1305,6 @@ fn step_fail(msg: &str) {
     eprintln!("\r\x1b[K\x1b[31m✗\x1b[0m {}", msg);
 }
 
-fn gh_authed() -> bool {
-    match Command::new("gh")
-        .args(["auth", "status"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        Ok(s) => s.success(),
-        Err(_) => false,
-    }
-}
-
-fn detect_ci(path: &Path) -> Option<CiInfo> {
-    let owner_repo = github_owner_repo(path)?;
-    let commit = current_commit(path)?;
-    let out = Command::new("gh")
-        .args([
-            "run",
-            "list",
-            "--repo",
-            &owner_repo,
-            "--commit",
-            &commit,
-            "--limit",
-            "1",
-            "--json",
-            "status,conclusion,name,url",
-            "-q",
-            r#".[0] | [.status, .conclusion // "", .name, .url] | @tsv"#,
-        ])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        return None;
-    }
-    let parts: Vec<&str> = s.splitn(4, '\t').collect();
-    if parts.len() < 4 {
-        return None;
-    }
-    let state = ci_state_from(parts[0], parts[1])?;
-    let url = parts[3].to_string();
-    let failed_step = if state == CiState::Failure {
-        run_id_from_url(&url).and_then(|id| failed_step(&owner_repo, &id))
-    } else {
-        None
-    };
-    Some(CiInfo {
-        state,
-        name: parts[2].to_string(),
-        url,
-        failed_step,
-    })
-}
-
-fn run_id_from_url(url: &str) -> Option<String> {
-    url.rsplit('/').next().map(|s| s.to_string())
-}
-
-fn failed_step(owner_repo: &str, run_id: &str) -> Option<String> {
-    let out = Command::new("gh")
-        .args([
-            "run",
-            "view",
-            run_id,
-            "--repo",
-            owner_repo,
-            "--json",
-            "jobs",
-            "-q",
-            r#"[.jobs[] | select(.conclusion == "failure") | "\(.name) → \(.steps | map(select(.conclusion == "failure"))[0].name // "?")"] | .[0] // """#,
-        ])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
-}
-
-fn ci_state_from(status: &str, conclusion: &str) -> Option<CiState> {
-    Some(match (status, conclusion) {
-        ("completed", "success") => CiState::Success,
-        ("completed", "failure" | "cancelled" | "timed_out" | "startup_failure") => {
-            CiState::Failure
-        }
-        ("in_progress", _) | ("queued", _) | ("waiting", _) | ("requested", _) => {
-            CiState::Running
-        }
-        _ => CiState::Unknown,
-    })
-}
-
-fn github_owner_repo(path: &Path) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["remote", "get-url", "origin"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if let Some(rest) = url.strip_prefix("git@github.com:") {
-        return Some(rest.strip_suffix(".git").unwrap_or(rest).to_string());
-    }
-    if let Some(rest) = url.strip_prefix("https://github.com/") {
-        return Some(rest.strip_suffix(".git").unwrap_or(rest).to_string());
-    }
-    if let Some(rest) = url.strip_prefix("ssh://git@github.com/") {
-        return Some(rest.strip_suffix(".git").unwrap_or(rest).to_string());
-    }
-    None
-}
-
-fn detect_prs(path: &Path) -> Option<Vec<PrInfo>> {
-    let owner_repo = github_owner_repo(path)?;
-    let out = Command::new("gh")
-        .args([
-            "pr",
-            "list",
-            "--repo",
-            &owner_repo,
-            "--author",
-            "@me",
-            "--state",
-            "open",
-            "--json",
-            "number,title,url,createdAt",
-            "-q",
-            r#".[] | [(.number|tostring), .title, .url, .createdAt] | @tsv"#,
-        ])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout);
-    let mut out = Vec::new();
-    for line in s.lines() {
-        let parts: Vec<&str> = line.splitn(4, '\t').collect();
-        if parts.len() < 4 {
-            continue;
-        }
-        let number: u64 = parts[0].parse().unwrap_or(0);
-        out.push(PrInfo {
-            number,
-            title: parts[1].to_string(),
-            url: parts[2].to_string(),
-            age: relative_age(parts[3]),
-        });
-    }
-    Some(out)
-}
-
-fn relative_age(iso: &str) -> String {
-    let date_part = iso.split('T').next().unwrap_or(iso);
-    date_part.to_string()
-}
-
-fn current_commit(path: &Path) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
-}
-
 fn pull_focused(app: &mut App, fetch_tx: &mpsc::Sender<FetchMsg>) {
     let Some(repo) = app.repos.get(app.selected) else {
         return;
@@ -1670,9 +1324,9 @@ fn pull_focused(app: &mut App, fetch_tx: &mpsc::Sender<FetchMsg>) {
             .stderr(Stdio::null())
             .status();
         let _ = tx.send(FetchMsg::Done(path.clone()));
-        let ci = detect_ci(&path);
+        let ci = github::detect_ci(&path);
         let _ = tx.send(FetchMsg::CiUpdate(path.clone(), ci));
-        let prs = detect_prs(&path);
+        let prs = github::detect_prs(&path);
         let _ = tx.send(FetchMsg::PrUpdate(path, prs));
     });
     app.flash_msg(format!("pulling {}…", name));
@@ -1697,9 +1351,9 @@ fn fetch_focused(app: &mut App, fetch_tx: &mpsc::Sender<FetchMsg>) {
             .stderr(Stdio::null())
             .status();
         let _ = tx.send(FetchMsg::Done(path.clone()));
-        let ci = detect_ci(&path);
+        let ci = github::detect_ci(&path);
         let _ = tx.send(FetchMsg::CiUpdate(path.clone(), ci));
-        let prs = detect_prs(&path);
+        let prs = github::detect_prs(&path);
         let _ = tx.send(FetchMsg::PrUpdate(path, prs));
     });
     app.flash_msg(format!("fetching {}…", name));
@@ -1709,7 +1363,7 @@ fn action_actions(app: &mut App) {
     let Some(repo) = app.repos.get(app.selected) else {
         return;
     };
-    let Some(owner_repo) = github_owner_repo(&repo.path) else {
+    let Some(owner_repo) = github::github_owner_repo(&repo.path) else {
         app.flash_msg("not a github remote");
         return;
     };
@@ -1721,7 +1375,7 @@ fn action_actions(app: &mut App) {
     } else {
         format!("https://github.com/{}/actions", owner_repo)
     };
-    open_url(&url);
+    github::open_url(&url);
     app.flash_msg(format!("opened {}", url));
 }
 
@@ -1741,53 +1395,12 @@ fn action_github(app: &mut App) {
             return;
         }
     };
-    let Some(http_url) = git_remote_to_https(&url) else {
+    let Some(http_url) = github::git_remote_to_https(&url) else {
         app.flash_msg("could not parse remote URL");
         return;
     };
-    open_url(&http_url);
+    github::open_url(&http_url);
     app.flash_msg(format!("opened {}", http_url));
-}
-
-fn git_remote_to_https(url: &str) -> Option<String> {
-    let url = url.trim();
-    if let Some(rest) = url.strip_prefix("https://") {
-        let rest = rest.strip_suffix(".git").unwrap_or(rest);
-        return Some(format!("https://{}", rest));
-    }
-    if let Some(rest) = url.strip_prefix("git@") {
-        if let Some((host, path)) = rest.split_once(':') {
-            let path = path.strip_suffix(".git").unwrap_or(path);
-            return Some(format!("https://{}/{}", host, path));
-        }
-    }
-    if let Some(rest) = url.strip_prefix("ssh://git@") {
-        let rest = rest.strip_suffix(".git").unwrap_or(rest);
-        let normalized = rest.replacen('/', ":", 1);
-        if let Some((host, path)) = normalized.split_once(':') {
-            return Some(format!("https://{}/{}", host, path));
-        }
-    }
-    None
-}
-
-fn open_url(url: &str) {
-    #[cfg(target_os = "macos")]
-    let _ = Command::new("open")
-        .arg(url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    #[cfg(target_os = "linux")]
-    let _ = Command::new("xdg-open")
-        .arg(url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    let _ = url;
 }
 
 fn action_copy_url(app: &mut App) {
@@ -1806,7 +1419,7 @@ fn action_copy_url(app: &mut App) {
             return;
         }
     };
-    let Some(http_url) = git_remote_to_https(&url) else {
+    let Some(http_url) = github::git_remote_to_https(&url) else {
         app.flash_msg("could not parse remote URL");
         return;
     };

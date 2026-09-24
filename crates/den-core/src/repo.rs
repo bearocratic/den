@@ -1,10 +1,11 @@
 use git2::{Repository, StatusOptions};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 use walkdir::WalkDir;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoStatus {
     pub path: PathBuf,
     pub name: String,
@@ -22,14 +23,14 @@ pub struct RepoStatus {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitInfo {
     pub short_sha: String,
     pub summary: String,
     pub time: SystemTime,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagInfo {
     pub name: String,
     pub commits_since: usize,

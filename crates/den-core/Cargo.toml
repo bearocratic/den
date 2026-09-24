@@ -1,0 +1,12 @@
+[package]
+name = "den-core"
+version = "0.8.1"
+edition = "2021"
+license = "Apache-2.0"
+description = "The watcher behind den: repository status, sessions, GitHub lookups"
+
+[dependencies]
+git2 = { version = "0.20", default-features = false }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+walkdir = "2"

@@ -1,6 +1,6 @@
 use crate::brand::{AMBER, AMBER_STRONG, CONFLICT, FOREST, IVORY, STONE, STONE_STRONG};
-use crate::repo::RepoStatus;
-use crate::{App, CiInfo, CiState, DetailSection, SortMode};
+use crate::{App, DetailSection};
+use den_core::{CiInfo, CiState, RepoStatus, SortMode};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
