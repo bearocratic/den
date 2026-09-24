@@ -23,7 +23,7 @@ Cargo (any platform with a Rust toolchain):
 
 ```sh
 cargo install --git https://github.com/bearocratic/den    # latest main
-cargo install --git https://github.com/bearocratic/den --tag v0.8.1   # pinned
+cargo install --git https://github.com/bearocratic/den --tag v0.9.0   # pinned
 ```
 
 The binary lands in `~/.cargo/bin/den`.

@@ -87,6 +87,44 @@ if [[ "$NEW" != "$VERSION" ]]; then
   exit 1
 fi
 
+# The workspace members carry the same version, and the menu bar app's
+# Tauri config carries it too — lodge refuses to sign a build whose
+# config disagrees with the tag.
+for MANIFEST in crates/den-core/Cargo.toml apps/bar/src-tauri/Cargo.toml; do
+  say "bumping ${MANIFEST} to ${VERSION}…"
+  TMP="$(mktemp)"
+  awk -v ver="$VERSION" '
+    !done && /^version[[:space:]]*=/ {
+      sub(/"[^"]+"/, "\"" ver "\"")
+      done = 1
+    }
+    { print }
+  ' "$MANIFEST" > "$TMP"
+  mv "$TMP" "$MANIFEST"
+  GOT="$(awk -F\" '/^version[[:space:]]*=/ { print $2; exit }' "$MANIFEST")"
+  if [[ "$GOT" != "$VERSION" ]]; then
+    err "${MANIFEST} bump failed (got: $GOT)"
+    exit 1
+  fi
+done
+
+CONF=apps/bar/src-tauri/tauri.conf.json
+say "bumping ${CONF} to ${VERSION}…"
+TMP="$(mktemp)"
+awk -v ver="$VERSION" '
+  !done && /"version"[[:space:]]*:/ {
+    sub(/"[0-9]+\.[0-9]+\.[0-9]+"/, "\"" ver "\"")
+    done = 1
+  }
+  { print }
+' "$CONF" > "$TMP"
+mv "$TMP" "$CONF"
+GOT="$(awk -F\" '/"version"[[:space:]]*:/ { print $4; exit }' "$CONF")"
+if [[ "$GOT" != "$VERSION" ]]; then
+  err "${CONF} bump failed (got: $GOT)"
+  exit 1
+fi
+
 # Pin the README's `cargo install --tag` example to the new release.
 if [[ -f README.md ]]; then
   say "updating README.md cargo install tag to ${TAG}…"
@@ -129,7 +167,9 @@ fi
 
 echo
 say "files staged for the release commit:"
-git --no-pager diff --stat -- Cargo.toml Cargo.lock README.md "$NOTES"
+git --no-pager diff --stat -- Cargo.toml Cargo.lock README.md "$NOTES" \
+    crates/den-core/Cargo.toml apps/bar/src-tauri/Cargo.toml \
+    apps/bar/src-tauri/tauri.conf.json
 echo
 
 read -r -p "commit, tag, and push $TAG? [y/N] " yn
@@ -139,7 +179,9 @@ if [[ "$yn" != "y" && "$yn" != "Y" ]]; then
 fi
 
 # Commit + tag with the bearocratic identity, regardless of local git config.
-git add Cargo.toml Cargo.lock README.md "$NOTES"
+git add Cargo.toml Cargo.lock README.md "$NOTES" \
+    crates/den-core/Cargo.toml apps/bar/src-tauri/Cargo.toml \
+    apps/bar/src-tauri/tauri.conf.json
 git -c user.name="$GIT_NAME" -c user.email="$GIT_EMAIL" \
     commit -m "chore(release): $TAG"
 git tag "$TAG"
