@@ -12,7 +12,7 @@ description = "TUI watcher for git repos in a base folder — shows dirty state 
 anyhow = "1"
 den-core = { path = "crates/den-core" }
 clap = { version = "4", features = ["derive"] }
-crossterm = "0.28"
+crossterm = "0.29"
 notify = "6"
 notify-debouncer-mini = "0.4"
 pulldown-cmark = { version = "0.12", default-features = false }
