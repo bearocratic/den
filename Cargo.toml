@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/den-core"]
+members = ["crates/den-core", "apps/bar/src-tauri"]
 
 [package]
 name = "den"

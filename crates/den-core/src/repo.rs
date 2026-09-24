@@ -68,6 +68,32 @@ const SKIP_DIRS: &[&str] = &[
     ".cache",
 ];
 
+/// Whether a path is somewhere den has no interest in watching.
+///
+/// The same list that keeps `discover` out of build output keeps a
+/// watcher from waking on every file a compiler writes. Git's own
+/// bookkeeping counts as noise except for the few files that say the
+/// state changed: HEAD, the index, and the refs.
+pub fn is_noise(path: &Path) -> bool {
+    let mut git_seen = false;
+    for component in path.components() {
+        let name = component.as_os_str().to_string_lossy();
+        if git_seen {
+            // Inside .git, only these three mean anything changed.
+            return !(name == "HEAD" || name == "index" || name == "refs");
+        }
+        if name == ".git" {
+            git_seen = true;
+            continue;
+        }
+        if SKIP_DIRS.contains(&name.as_ref()) {
+            return true;
+        }
+    }
+    // A bare ".git" with nothing after it is a change worth seeing.
+    false
+}
+
 pub fn discover(base: &Path, max_depth: usize) -> Vec<PathBuf> {
     let mut repos = Vec::new();
     let mut walker = WalkDir::new(base)
@@ -258,4 +284,32 @@ fn latest_tag(path: &Path) -> Option<TagInfo> {
         commits_since,
         time,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_noise;
+    use std::path::Path;
+
+    #[test]
+    fn build_output_is_noise() {
+        assert!(is_noise(Path::new("/w/den/target/debug/den")));
+        assert!(is_noise(Path::new("/w/app/node_modules/x/index.js")));
+        assert!(is_noise(Path::new("/w/site/dist/main.css")));
+    }
+
+    #[test]
+    fn work_in_the_tree_is_not() {
+        assert!(!is_noise(Path::new("/w/den/src/main.rs")));
+        assert!(!is_noise(Path::new("/w/den/README.md")));
+    }
+
+    #[test]
+    fn only_the_telling_parts_of_git_wake_us() {
+        assert!(!is_noise(Path::new("/w/den/.git/HEAD")));
+        assert!(!is_noise(Path::new("/w/den/.git/index")));
+        assert!(!is_noise(Path::new("/w/den/.git/refs/heads/main")));
+        assert!(is_noise(Path::new("/w/den/.git/objects/ab/cdef")));
+        assert!(is_noise(Path::new("/w/den/.git/logs/HEAD")));
+    }
 }

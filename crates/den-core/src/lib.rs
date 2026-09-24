@@ -14,4 +14,4 @@ pub mod session;
 
 pub use model::{CiInfo, CiState, FetchMsg, PrInfo, SortMode};
 pub use order::{display_order, state_priority, OrderView};
-pub use repo::{CommitInfo, RepoStatus, TagInfo};
+pub use repo::{is_noise, CommitInfo, RepoStatus, TagInfo};

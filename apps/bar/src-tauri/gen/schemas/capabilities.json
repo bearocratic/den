@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"What the panel may ask of the app: its own commands, and the file dialog behind 'Add folder'.","local":true,"windows":["panel"],"permissions":["core:default","dialog:allow-open"]}}

@@ -105,10 +105,12 @@ jobs:
           USE_CROSS: ${{ matrix.cross }}
         run: |
           set -euo pipefail
+          # -p den on purpose: the workspace also holds the macOS
+          # menu bar app, which no Linux runner can build.
           if [[ "$USE_CROSS" == "true" ]]; then
-            cross build --release --locked --target "$TARGET"
+            cross build --release --locked -p den --target "$TARGET"
           else
-            cargo build --release --locked --target "$TARGET"
+            cargo build --release --locked -p den --target "$TARGET"
           fi
           OUTDIR="dist/den-${TAG}-${ASSET}"
           mkdir -p "$OUTDIR"

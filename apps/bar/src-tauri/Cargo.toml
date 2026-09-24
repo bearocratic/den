@@ -1,0 +1,19 @@
+[package]
+name = "den-bar"
+version = "0.8.1"
+edition = "2021"
+license = "Apache-2.0"
+description = "den in the macOS menu bar: the state of every watched repository, at a glance"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+den-core = { path = "../../../crates/den-core" }
+notify = "6"
+notify-debouncer-mini = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-dialog = "2"
+toml = "0.8"

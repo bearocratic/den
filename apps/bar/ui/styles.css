@@ -1,0 +1,161 @@
+/* The panel is a menu, so it borrows the system's typography, its
+   accent highlight and its appearance. Only the state dots are den's
+   own — everything else should look like it came with the Mac. */
+
+:root {
+  color-scheme: light dark;
+  font: 13px/1.3 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+
+  /* den's palette, for the one job the system has no colour for. */
+  --forest: #4E9B74;
+  --amber: #C98A33;
+  --conflict: #C24A3F;
+
+  --label: CanvasText;
+  --secondary: color-mix(in srgb, CanvasText 55%, transparent);
+  --tertiary: color-mix(in srgb, CanvasText 38%, transparent);
+  --hairline: color-mix(in srgb, CanvasText 14%, transparent);
+  --hover: color-mix(in srgb, CanvasText 8%, transparent);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  /* The window's own material shows through. */
+  background: transparent;
+  color: var(--label);
+  user-select: none;
+  cursor: default;
+  overflow: hidden;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 4px 0;
+}
+
+/* ── Menu rows ──────────────────────────────────────────────── */
+
+.row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  margin: 0 5px;
+  padding: 3px 8px;
+  border-radius: 5px;
+}
+.row:hover, .row:focus-visible {
+  background: AccentColor;
+  color: AccentColorText;
+  outline: none;
+}
+.row:hover .sub,
+.row:hover .counts { color: color-mix(in srgb, AccentColorText 78%, transparent); }
+.row:hover .dot { box-shadow: 0 0 0 1px color-mix(in srgb, AccentColorText 55%, transparent); }
+
+/* Without this the name and branch refuse to shrink and push the
+   counts out of the row. */
+.body { min-width: 0; }
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sub {
+  color: var(--secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: var(--tertiary);
+}
+.row[data-state="dirty"] .dot { background: var(--amber); }
+.row[data-state="conflict"] .dot,
+.row[data-state="error"] .dot,
+.row[data-ci="failure"] .dot { background: var(--conflict); }
+.row[data-state="clean"] .dot { background: var(--forest); }
+
+.counts {
+  display: flex;
+  gap: 5px;
+  color: var(--secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.c-conflict, .c-ci-failure { color: var(--conflict); }
+.c-ci-running { color: var(--amber); }
+.c-ci-success { color: var(--forest); }
+
+/* ── Section headers, separators, plain items ───────────────── */
+
+.section {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 13px 2px;
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 590;
+}
+.section-roll {
+  flex: 1;
+  color: var(--tertiary);
+  font-weight: 400;
+}
+.section-drop {
+  border: 0;
+  background: none;
+  color: var(--tertiary);
+  font: inherit;
+  cursor: default;
+  visibility: hidden;
+}
+.section:hover .section-drop { visibility: visible; }
+
+hr {
+  height: 1px;
+  margin: 4px 12px;
+  border: 0;
+  background: var(--hairline);
+}
+
+.item {
+  display: block;
+  margin: 0 5px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: var(--label);
+}
+.item:hover { background: AccentColor; color: AccentColorText; }
+.item-quiet {
+  color: var(--tertiary);
+  padding: 3px 13px;
+  margin: 0;
+}
+.item-quiet:hover { background: none; color: var(--tertiary); }
+
+.list { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+.list::-webkit-scrollbar { width: 0; }
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1px 13px 2px;
+  color: var(--tertiary);
+  font-size: 11px;
+}
