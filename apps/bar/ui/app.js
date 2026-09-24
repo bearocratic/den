@@ -186,8 +186,8 @@ function render(snapshot) {
     : snapshot.checking
       ? 'Checking…'
       : snapshot.checked
-        ? 'den is up to date'
-        : 'Check for updates…';
+        ? `den ${snapshot.version} · up to date`
+        : `den ${snapshot.version} · check for updates…`;
 
   el.ciAge.textContent = snapshot.gh
     ? snapshot.ci_age_secs == null

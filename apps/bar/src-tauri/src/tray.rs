@@ -55,7 +55,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                 });
             }
             "add" => crate::commands::pick_folder(app.clone()),
-            "quit" => app.exit(0),
+            "quit" => crate::quit(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {

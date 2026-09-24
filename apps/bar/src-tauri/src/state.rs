@@ -194,6 +194,8 @@ pub struct FolderView {
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
     pub folders: Vec<FolderView>,
+    /// The version running right now, so the menu can say it.
+    pub version: String,
     pub update: Option<String>,
     pub checking: bool,
     pub checked: bool,
@@ -205,6 +207,7 @@ pub struct Snapshot {
 
 /// Everything the bar holds between scans.
 pub struct Model {
+    pub version: String,
     pub cfg: BarConfig,
     pub repos: Vec<RepoStatus>,
     pub ci: HashMap<PathBuf, CiInfo>,
@@ -222,9 +225,10 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn new() -> Self {
+    pub fn new(version: String) -> Self {
         let cfg = BarConfig::load();
         let mut m = Model {
+            version,
             cfg,
             repos: Vec::new(),
             ci: HashMap::new(),
@@ -280,6 +284,7 @@ impl Model {
 
         Snapshot {
             folders,
+            version: self.version.clone(),
             update: self.update.clone(),
             checking: self.checking,
             checked: self.checked,

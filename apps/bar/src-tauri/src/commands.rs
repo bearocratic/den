@@ -75,7 +75,7 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
 /// right-click a glyph.
 #[tauri::command]
 pub fn quit(app: AppHandle) {
-    app.exit(0);
+    crate::quit(&app);
 }
 
 #[tauri::command]

@@ -23,6 +23,17 @@ const PANEL_W: f64 = 360.0;
 const PANEL_H: f64 = 480.0;
 const PANEL_RADIUS: f64 = 10.0;
 
+/// Leave for good.
+///
+/// The run loop refuses ExitRequested so that closing the panel does
+/// not end the app — and that refusal swallows app.exit() as well, so
+/// asking to quit has to go around it, after Tauri has had its chance
+/// to tidy up.
+pub fn quit(app: &tauri::AppHandle) {
+    app.cleanup_before_exit();
+    std::process::exit(0);
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -48,7 +59,7 @@ fn main() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            let model = Model::new();
+            let model = Model::new(app.package_info().version.to_string());
             let folders = model.cfg.folders.clone();
             app.manage(Arc::new(Mutex::new(model)));
             app.manage(Arc::new(watch::Scans::default()));
@@ -99,6 +110,8 @@ fn main() {
         .expect("den failed to start")
         .run(|_app, event| {
             // Closing the panel is not quitting: the glyph stays.
+            // Quit den goes through quit() above, which does not ask.
+            // Quit den goes through quit() above, which does not ask.
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
                 api.prevent_exit();
             }
