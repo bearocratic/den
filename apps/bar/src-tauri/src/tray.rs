@@ -13,19 +13,28 @@ const CLEAN: &[u8] = include_bytes!("../icons/tray-clean.png");
 const DIRTY: &[u8] = include_bytes!("../icons/tray-dirty.png");
 const FAILING: &[u8] = include_bytes!("../icons/tray-failing.png");
 
-fn badge_image(badge: Badge) -> Option<Image<'static>> {
-    let bytes = match badge {
-        Badge::Clean => CLEAN,
-        Badge::Dirty => DIRTY,
-        Badge::Failing => FAILING,
+/// The artwork for a state, and whether macOS may tint it.
+///
+/// Everything else in a menu bar is a template image: black with an
+/// alpha channel, which the system inverts for a light bar and dims
+/// when the bar is inactive. A fixed colour ignores all of that and
+/// sits there as the only loud thing on the strip — so den is a
+/// template too, and spends colour on the one state worth
+/// interrupting for.
+fn badge_image(badge: Badge) -> Option<(Image<'static>, bool)> {
+    let (bytes, template) = match badge {
+        Badge::Clean => (CLEAN, true),
+        Badge::Dirty => (DIRTY, true),
+        Badge::Failing => (FAILING, false),
     };
-    Image::from_bytes(bytes).ok()
+    Image::from_bytes(bytes).ok().map(|image| (image, template))
 }
 
 /// The glyph says one thing, and it is always the worst thing.
 pub fn set_badge(app: &AppHandle, badge: Badge) {
-    if let (Some(tray), Some(image)) = (app.tray_by_id(TRAY_ID), badge_image(badge)) {
+    if let (Some(tray), Some((image, template))) = (app.tray_by_id(TRAY_ID), badge_image(badge)) {
         let _ = tray.set_icon(Some(image));
+        let _ = tray.set_icon_as_template(template);
     }
 }
 
@@ -77,8 +86,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             }
         });
 
-    if let Some(image) = badge_image(Badge::Clean) {
-        builder = builder.icon(image);
+    if let Some((image, template)) = badge_image(Badge::Clean) {
+        builder = builder.icon(image).icon_as_template(template);
     }
     builder.build(app)?;
     Ok(())
