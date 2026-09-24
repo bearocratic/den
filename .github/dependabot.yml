@@ -1,21 +1,30 @@
 version: 2
-  updates:
-    - package-ecosystem: "cargo"
-      directory: "/"
-      schedule:
-        interval: "weekly"
-      open-pull-requests-limit: 5
-      groups:
-        cargo-minor-patch:
-          update-types:
-            - "minor"
-            - "patch"
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # glib reaches the lockfile through Tauri's Linux toolkit —
+      # tauri → tray-icon → libappindicator → gtk 0.18 → glib — and
+      # the menu bar app is macOS only, so nothing we ship contains
+      # it. A lockfile records every target regardless of what is
+      # built, and Tauri pins gtk 0.18 upstream, so the advisory has
+      # nowhere to resolve to. Drop this when tao and wry move to
+      # gtk 0.20.
+      - dependency-name: "glib"
 
-    - package-ecosystem: "github-actions"
-      directory: "/"
-      schedule:
-        interval: "weekly"
-      groups:
-        actions:
-          patterns:
-            - "*"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns:
+          - "*"
