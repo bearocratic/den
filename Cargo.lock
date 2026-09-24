@@ -812,7 +812,7 @@ checksum = "5729f5117e208430e437df2f4843f5e5952997175992d1414f94c57d61e270b4"
 
 [[package]]
 name = "den"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -827,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "den-bar"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "den-core",
  "notify",
@@ -842,7 +842,7 @@ dependencies = [
 
 [[package]]
 name = "den-core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "git2",
  "serde",
