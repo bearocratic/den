@@ -11,6 +11,8 @@ const el = {
   ciAge: document.getElementById('ci-age'),
   refresh: document.getElementById('refresh'),
   add: document.getElementById('add'),
+  quit: document.getElementById('quit'),
+  update: document.getElementById('update'),
 };
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -176,6 +178,10 @@ function render(snapshot) {
   // nothing else can say: what the modifiers do.
   el.meta.textContent = snapshot.scanning ? 'scanning…' : '⌘ GitHub · ⌥ editor · ⇧ Finder';
 
+  // Nothing is said about updates until there is one to install.
+  el.update.hidden = !snapshot.update;
+  if (snapshot.update) el.update.textContent = `Update to ${snapshot.update}`;
+
   el.ciAge.textContent = snapshot.gh
     ? snapshot.ci_age_secs == null
       ? 'CI not checked yet'
@@ -186,6 +192,11 @@ function render(snapshot) {
 
 el.refresh.addEventListener('click', () => invoke('rescan'));
 el.add.addEventListener('click', () => invoke('add_folder'));
+el.quit.addEventListener('click', () => invoke('quit'));
+el.update.addEventListener('click', () => {
+  el.update.textContent = 'Updating…';
+  invoke('install_update');
+});
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') invoke('hide_panel');
   if (event.key === 'r' && (event.metaKey || event.ctrlKey)) invoke('rescan');

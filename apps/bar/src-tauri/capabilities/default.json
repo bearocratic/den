@@ -1,7 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the panel may ask of the app: its own commands, and the file dialog behind 'Add folder'.",
-  "windows": ["panel"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "description": "What the panel may ask of the app: its own commands, the file dialog behind 'Add folder', and the update it can install.",
+  "windows": [
+    "panel"
+  ],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "updater:default",
+    "process:allow-restart"
+  ]
 }

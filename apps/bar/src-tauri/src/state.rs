@@ -82,6 +82,48 @@ impl BarConfig {
     }
 }
 
+/// A name for each folder, long enough to tell them apart.
+///
+/// The last segment is usually enough — `~/work` is "work". When two
+/// folders end in the same word, both grow a segment to the left, and
+/// keep growing until they differ, so `~/work/projects` and
+/// `~/personal/projects` never both read "projects".
+pub fn label_folders(folders: &[PathBuf]) -> Vec<String> {
+    let parts: Vec<Vec<String>> = folders
+        .iter()
+        .map(|f| {
+            f.components()
+                .map(|c| c.as_os_str().to_string_lossy().to_string())
+                .filter(|s| s != "/")
+                .collect()
+        })
+        .collect();
+
+    let mut labels: Vec<String> = Vec::with_capacity(folders.len());
+    for (i, mine) in parts.iter().enumerate() {
+        let mut depth = 1;
+        while depth < mine.len() {
+            let tail = |p: &Vec<String>| p[p.len().saturating_sub(depth)..].join("/");
+            let me = tail(mine);
+            let clashes = parts
+                .iter()
+                .enumerate()
+                .any(|(j, other)| j != i && tail(other) == me);
+            if !clashes {
+                break;
+            }
+            depth += 1;
+        }
+        let label = mine[mine.len().saturating_sub(depth)..].join("/");
+        labels.push(if label.is_empty() {
+            folders[i].display().to_string()
+        } else {
+            label
+        });
+    }
+    labels
+}
+
 /// Watching a folder and a folder inside it lists every nested
 /// repository twice, so the inner one goes.
 fn prune_nested(folders: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -152,6 +194,7 @@ pub struct FolderView {
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
     pub folders: Vec<FolderView>,
+    pub update: Option<String>,
     pub badge: Badge,
     pub scanning: bool,
     pub ci_age_secs: Option<u64>,
@@ -166,6 +209,8 @@ pub struct Model {
     pub ci_at: Option<SystemTime>,
     pub gh: bool,
     pub scanning: bool,
+    /// The version waiting to be installed, once a check has found one.
+    pub update: Option<String>,
     pub hidden: HashSet<PathBuf>,
     pub pinned: HashSet<PathBuf>,
 }
@@ -180,6 +225,7 @@ impl Model {
             ci_at: None,
             gh: false,
             scanning: false,
+            update: None,
             hidden: HashSet::new(),
             pinned: HashSet::new(),
         };
@@ -207,11 +253,13 @@ impl Model {
     }
 
     pub fn snapshot(&self) -> Snapshot {
+        let labels = label_folders(&self.cfg.folders);
         let folders: Vec<FolderView> = self
             .cfg
             .folders
             .iter()
-            .map(|base| self.folder_view(base))
+            .zip(labels)
+            .map(|(base, label)| self.folder_view(base, label))
             .collect();
 
         let badge = if folders.iter().any(|f| f.failing > 0) {
@@ -224,6 +272,7 @@ impl Model {
 
         Snapshot {
             folders,
+            update: self.update.clone(),
             badge,
             scanning: self.scanning,
             ci_age_secs: self
@@ -234,7 +283,7 @@ impl Model {
         }
     }
 
-    fn folder_view(&self, base: &Path) -> FolderView {
+    fn folder_view(&self, base: &Path, label: String) -> FolderView {
         let mine: Vec<RepoStatus> = self
             .repos
             .iter()
@@ -265,10 +314,7 @@ impl Model {
 
         FolderView {
             path: base.display().to_string(),
-            label: base
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| base.display().to_string()),
+            label,
             total: repos.len(),
             dirty,
             failing,
@@ -340,6 +386,30 @@ mod tests {
         assert_eq!(
             prune_nested(paths(&["/work/den", "/work"])),
             paths(&["/work"])
+        );
+    }
+
+    #[test]
+    fn folders_are_named_by_their_last_segment() {
+        assert_eq!(
+            super::label_folders(&paths(&["/Users/j/work", "/Users/j/personal"])),
+            vec!["work", "personal"]
+        );
+    }
+
+    #[test]
+    fn two_folders_of_one_name_grow_until_they_differ() {
+        assert_eq!(
+            super::label_folders(&paths(&["/Users/j/work/projects", "/Users/j/personal/projects"])),
+            vec!["work/projects", "personal/projects"]
+        );
+    }
+
+    #[test]
+    fn only_the_ones_that_clash_grow() {
+        assert_eq!(
+            super::label_folders(&paths(&["/a/x/projects", "/b/y/projects", "/c/notes"])),
+            vec!["x/projects", "y/projects", "notes"]
         );
     }
 

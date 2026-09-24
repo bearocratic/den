@@ -9,6 +9,7 @@ mod actions;
 mod commands;
 mod state;
 mod tray;
+mod update;
 mod watch;
 
 use state::Model;
@@ -25,6 +26,8 @@ const PANEL_RADIUS: f64 = 10.0;
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             commands::snapshot,
             commands::rescan,
@@ -33,8 +36,17 @@ fn main() {
             commands::add_folder,
             commands::remove_folder,
             commands::hide_panel,
+            commands::quit,
+            commands::install_update,
         ])
         .setup(|app| {
+            // No Dock icon. Info.plist asks for that with LSUIElement
+            // and the bundle carries it, but Tauri sets the activation
+            // policy to Regular as it starts and that wins — so it has
+            // to be said here, where it also covers a plain cargo run.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             let model = Model::new();
             let folders = model.cfg.folders.clone();
             app.manage(Arc::new(Mutex::new(model)));
@@ -76,6 +88,7 @@ fn main() {
             let rewatch = watch::spawn_fs_watcher(app.handle().clone(), folders);
             app.manage(watch::Rewatch(rewatch));
             watch::spawn_fetch_loop(app.handle().clone());
+            update::spawn_checks(app.handle().clone());
 
             let first = app.handle().clone();
             std::thread::spawn(move || watch::rescan(&first, true));

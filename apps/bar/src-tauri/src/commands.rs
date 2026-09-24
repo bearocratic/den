@@ -59,6 +59,19 @@ pub fn remove_folder(app: AppHandle, path: String) {
     std::thread::spawn(move || crate::watch::rescan(&handle, true));
 }
 
+/// Fetch the version the check found and come back as it.
+#[tauri::command]
+pub async fn install_update(app: AppHandle) -> Result<(), String> {
+    crate::update::install(app).await
+}
+
+/// Quitting from the panel, since nothing tells a person to
+/// right-click a glyph.
+#[tauri::command]
+pub fn quit(app: AppHandle) {
+    app.exit(0);
+}
+
 #[tauri::command]
 pub fn hide_panel(app: AppHandle) {
     if let Some(window) = app.get_webview_window(crate::tray::PANEL) {

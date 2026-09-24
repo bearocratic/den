@@ -159,3 +159,7 @@ hr {
   color: var(--tertiary);
   font-size: 11px;
 }
+
+/* The one item that is not always there. */
+.item-update { color: var(--forest); }
+.item-update:hover { background: AccentColor; color: AccentColorText; }

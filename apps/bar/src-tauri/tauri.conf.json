@@ -17,7 +17,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "app"],
+    "targets": [
+      "dmg",
+      "app"
+    ],
     "category": "DeveloperTool",
     "shortDescription": "The state of every watched repository, in the menu bar",
     "icon": [
@@ -28,6 +31,7 @@
     ],
     "macOS": {
       "minimumSystemVersion": "11.0"
-    }
+    },
+    "createUpdaterArtifacts": true
   }
 }
