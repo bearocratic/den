@@ -12,6 +12,21 @@
      whatever the person has set and is never ours. */
   --accent: #2A4A3D;
   --on-accent: #EDE9E2;
+
+  /* The states, as the site draws them: forest for clean, the sheet
+     purple for dirty — amber has not been the dirty colour anywhere
+     in the bearo world since purple took it — and the rust for
+     trouble, which lifts on a dark ground. */
+  --forest: #4E9B74;
+  --purple: #C1A2E2;
+  --conflict: #B5523A;
+
+  --label: CanvasText;
+  --secondary: color-mix(in srgb, CanvasText 55%, transparent);
+  --tertiary: color-mix(in srgb, CanvasText 38%, transparent);
+  --hairline: color-mix(in srgb, CanvasText 14%, transparent);
+  --hover: color-mix(in srgb, CanvasText 8%, transparent);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
 
 /* On a dark menu the forest goes muddy, so the accent flips to the
@@ -20,16 +35,8 @@
   :root {
     --accent: #C1A2E2;
     --on-accent: #14120F;
+    --conflict: #E2785A;
   }
-  --forest: #4E9B74;
-  --amber: #C98A33;
-  --conflict: #C24A3F;
-
-  --label: CanvasText;
-  --secondary: color-mix(in srgb, CanvasText 55%, transparent);
-  --tertiary: color-mix(in srgb, CanvasText 38%, transparent);
-  --hairline: color-mix(in srgb, CanvasText 14%, transparent);
-  --hover: color-mix(in srgb, CanvasText 8%, transparent);
 }
 
 * { box-sizing: border-box; }
@@ -96,7 +103,7 @@ html, body {
   border-radius: 50%;
   background: var(--tertiary);
 }
-.row[data-state="dirty"] .dot { background: var(--amber); }
+.row[data-state="dirty"] .dot { background: var(--purple); }
 .row[data-state="conflict"] .dot,
 .row[data-state="error"] .dot,
 .row[data-ci="failure"] .dot { background: var(--conflict); }
@@ -110,7 +117,7 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 .c-conflict, .c-ci-failure { color: var(--conflict); }
-.c-ci-running { color: var(--amber); }
+.c-ci-running { color: var(--purple); }
 .c-ci-success { color: var(--forest); }
 
 /* ── Section headers, separators, plain items ───────────────── */
