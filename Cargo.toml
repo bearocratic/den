@@ -14,7 +14,7 @@ den-core = { path = "crates/den-core" }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 notify = "6"
-notify-debouncer-mini = "0.4"
+notify-debouncer-mini = "0.7"
 pulldown-cmark = { version = "0.12", default-features = false }
 ratatui = "0.30"
 serde = { version = "1", features = ["derive"] }
