@@ -34,28 +34,40 @@ pub fn stale(app: &AppHandle) -> bool {
 pub async fn look(app: &AppHandle, told: bool) -> Option<String> {
     let shared = app.state::<Arc<Mutex<Model>>>().inner().clone();
     if told {
-        shared.lock().unwrap().checking = true;
+        let mut m = shared.lock().unwrap();
+        m.checking = true;
+        m.check_failed = None;
+        drop(m);
         crate::watch::publish(app, &shared);
     }
 
-    let found = match app.updater() {
-        Ok(updater) => updater.check().await.ok().flatten(),
-        Err(_) => None,
+    // A check that could not be made is not the same as a check that
+    // found nothing. Reporting the first as the second is how an app
+    // tells someone they are current while quietly failing.
+    let outcome = match app.updater() {
+        Ok(updater) => updater.check().await.map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
     };
-    let version = found.map(|f| f.version.clone());
+
+    let (version, failure) = match outcome {
+        Ok(found) => (found.map(|f| f.version.clone()), None),
+        Err(why) => (None, Some(why)),
+    };
 
     {
         let mut m = shared.lock().unwrap();
         m.checking = false;
         m.update = version.clone();
+        m.check_failed = failure.clone();
         if told {
             m.checked_at = Some(std::time::SystemTime::now());
         }
     }
     crate::watch::publish(app, &shared);
-    match &version {
-        Some(v) => crate::watch::log(format!("update available: {v}")),
-        None => crate::watch::log("no update"),
+    match (&version, &failure) {
+        (Some(v), _) => crate::watch::log(format!("update available: {v}")),
+        (None, Some(why)) => crate::watch::log(format!("could not check for updates: {why}")),
+        (None, None) => crate::watch::log("no update"),
     }
     version
 }

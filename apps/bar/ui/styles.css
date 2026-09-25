@@ -7,7 +7,20 @@
   font: 13px/1.3 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 
-  /* den's palette, for the one job the system has no colour for. */
+  /* den's palette. The accent is the house one — forest on a light
+     menu, purple on a dark one — rather than the system's, which is
+     whatever the person has set and is never ours. */
+  --accent: #2A4A3D;
+  --on-accent: #EDE9E2;
+}
+
+/* On a dark menu the forest goes muddy, so the accent flips to the
+   sheet purple — the same pair the rest of the bearo world uses. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: #C1A2E2;
+    --on-accent: #14120F;
+  }
   --forest: #4E9B74;
   --amber: #C98A33;
   --conflict: #C24A3F;
@@ -51,13 +64,13 @@ html, body {
   border-radius: 5px;
 }
 .row:hover, .row:focus-visible {
-  background: AccentColor;
-  color: AccentColorText;
+  background: var(--accent);
+  color: var(--on-accent);
   outline: none;
 }
 .row:hover .sub,
-.row:hover .counts { color: color-mix(in srgb, AccentColorText 78%, transparent); }
-.row:hover .dot { box-shadow: 0 0 0 1px color-mix(in srgb, AccentColorText 55%, transparent); }
+.row:hover .counts { color: color-mix(in srgb, var(--on-accent) 78%, transparent); }
+.row:hover .dot { box-shadow: 0 0 0 1px color-mix(in srgb, var(--on-accent) 55%, transparent); }
 
 /* Without this the name and branch refuse to shrink and push the
    counts out of the row. */
@@ -140,7 +153,7 @@ hr {
   border-radius: 5px;
   color: var(--label);
 }
-.item:hover { background: AccentColor; color: AccentColorText; }
+.item:hover { background: var(--accent); color: var(--on-accent); }
 .item-quiet {
   color: var(--tertiary);
   padding: 3px 13px;
@@ -163,6 +176,8 @@ hr {
 /* The item that answers "am I current?" — quiet until it has
    something to offer. */
 .item-update.is-offer { color: var(--forest); }
+/* A check that could not be made is not good news. */
+.item-update.is-trouble { color: var(--conflict); }
 /* A build that cannot update is a label, not a button. */
 .item-update.is-static { color: var(--tertiary); }
 .item-update.is-static:hover { background: none; color: var(--tertiary); }

@@ -193,9 +193,13 @@ function render(snapshot) {
       ? `Update to ${snapshot.update}`
       : snapshot.checking
         ? 'Checking…'
-        : fresh
-          ? `den ${snapshot.version} · up to date`
-          : `den ${snapshot.version} · check for updates…`;
+        : snapshot.check_failed && fresh
+          ? `den ${snapshot.version} · could not check`
+          : fresh
+            ? `den ${snapshot.version} · up to date`
+            : `den ${snapshot.version} · check for updates…`;
+    el.update.title = snapshot.check_failed || '';
+    el.update.classList.toggle('is-trouble', Boolean(snapshot.check_failed && fresh));
   }
 
   el.ciAge.textContent = snapshot.gh

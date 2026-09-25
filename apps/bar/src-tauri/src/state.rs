@@ -117,6 +117,8 @@ pub struct Snapshot {
     pub checking: bool,
     /// Seconds since the last answer, if it is recent enough to show.
     pub checked_secs: Option<u64>,
+    /// Set when the last check could not be made at all.
+    pub check_failed: Option<String>,
     pub badge: Badge,
     pub scanning: bool,
     pub ci_age_secs: Option<u64>,
@@ -139,6 +141,8 @@ pub struct Model {
     pub checking: bool,
     /// When someone last asked, so "up to date" can stop being said.
     pub checked_at: Option<SystemTime>,
+    /// Why the last check could not be made, if it could not.
+    pub check_failed: Option<String>,
     pub hidden: HashSet<PathBuf>,
     pub pinned: HashSet<PathBuf>,
 }
@@ -158,6 +162,7 @@ impl Model {
             update: None,
             checking: false,
             checked_at: None,
+            check_failed: None,
             hidden: HashSet::new(),
             pinned: HashSet::new(),
         };
@@ -212,6 +217,7 @@ impl Model {
                 .checked_at
                 .and_then(|t| SystemTime::now().duration_since(t).ok())
                 .map(|d| d.as_secs()),
+            check_failed: self.check_failed.clone(),
             badge,
             scanning: self.scanning,
             ci_age_secs: self
