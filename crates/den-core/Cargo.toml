@@ -1,6 +1,6 @@
 [package]
 name = "den-core"
-version = "0.9.9"
+version = "0.9.10"
 edition = "2021"
 license = "Apache-2.0"
 description = "The watcher behind den: repository status, sessions, GitHub lookups"
